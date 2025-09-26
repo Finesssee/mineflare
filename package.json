@@ -1,0 +1,26 @@
+{
+  "name": "cloudflare-container",
+  "version": "0.0.0",
+  "description": "Alchemy Typescript Project",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "configure": "alchemy configure",
+    "version": "alchemy --version",
+    "login": "alchemy login",
+    "deploy": "alchemy deploy --env-file .env",
+    "destroy": "alchemy destroy --env-file .env",
+    "dev": "alchemy dev --env-file .env"
+  },
+  "devDependencies": {
+    "@cloudflare/containers": "^0.0.28",
+    "@cloudflare/workers-types": "^4.20250926.0",
+    "@types/node": "^24.5.2",
+    "alchemy": "0.68.0",
+    "hono": "^4.8.3",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.5"
+  }
+}
