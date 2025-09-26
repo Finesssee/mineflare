@@ -1,6 +1,6 @@
 # Project specific
 .alchemy/
-.specstory/.what-is-this.md
+.specstory/
 /.worktrees/
 
 # Dependencies
