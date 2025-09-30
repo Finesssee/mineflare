@@ -1,84 +1,127 @@
 import { Container, getContainer, getRandom } from "@cloudflare/containers";
-import { Hono } from "hono";
+import { Elysia, t } from "elysia";
+import { Rcon } from "./lib/rcon";
 import type { worker } from "../alchemy.run";
-export class MinecraftContainer extends Container<typeof worker.Env> {
-  // Port the container listens on (default: 8080)
-  defaultPort = 8080;
-  // Time before container sleeps due to inactivity (default: 30s)
-  sleepAfter = "20m";
-  // Environment variables passed to the container
-  envVars = {
-    TS_EXTRA_ARGS: "--advertise-exit-node",
-    TS_ENABLE_HEALTH_CHECK: "true",
-    TS_LOCAL_ADDR_PORT: "0.0.0.0:8080",
-    TS_AUTHKEY: this.env.TS_AUTHKEY,
-    // Minecraft server configuration
-    EULA: "TRUE",
-    SERVER_HOST: "0.0.0.0",
-    ONLINE_MODE: "false",
-    ENABLE_RCON: "true",
-    // Hardcoded password is safe since we're running on a private tailnet
-    RCON_PASSWORD: "minecraft",
-    RCON_PORT: "25575",
-  };
+import { CloudflareAdapter } from 'elysia/adapter/cloudflare-worker'
+import { MinecraftContainer } from "./container";
+import { env as workerEnv } from 'cloudflare:workers'
+import cors from "@elysiajs/cors";
+import { getNodeEnv } from "./client/utils/node-env";
 
-  enableInternet = true;
-  
+const env = workerEnv as typeof worker.Env;
 
-  // Optional lifecycle hooks
-  override onStart() {
-    console.log("Container successfully started");
-  }
-
-  override onStop() {
-    console.log("Container successfully shut down");
-  }
-
-  override onError(error: unknown) {
-    console.log("Container error:", error);
-  }
+function getMinecraftContainer() {
+  return getContainer(env.MINECRAFT_CONTAINER as unknown as DurableObjectNamespace<MinecraftContainer>);
 }
 
-// Create Hono app with proper typing for Cloudflare Workers
-const app = new Hono<{
-  Bindings: { MINECRAFT_CONTAINER: DurableObjectNamespace<MinecraftContainer> };
-}>();
+// Create Elysia app with proper typing for Cloudflare Workers
+let elysiaApp = (
+  getNodeEnv() === 'development'
+  ? new Elysia({
+      adapter: CloudflareAdapter,
+      // aot: false,
+    }).use(cors({
+        origin: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
+        credentials: true,
+        maxAge: 86400,
+    }))
+  : new Elysia({
+      adapter: CloudflareAdapter,
+      // aot: false,
+    })
+  )
+  .get("/", () => 'foo')
+  
+  // API routes for the SPA
+  .get("/api/status", async () => {
+    try {
+      console.log("Getting container");
+      const container = getMinecraftContainer();
+      console.log("Starting container");
+      await container.startAndWaitForPorts();
+      const response = await container.fetch(new Request("http://localhost/rcon/status"));
+      const status = await response.json();
+      return status;
+    } catch (error) {
+      console.error("Failed to get status", error);
+      return { online: false, error: "Failed to get status" };
+    }
+  })
 
-// Home route with available endpoints
-app.get("/", (c) => {
-  return c.text(
-    "Available endpoints:\n" +
-      "GET /container/<ID> - Start a container for each ID with a 2m timeout\n" +
-      "GET /lb - Load balance requests over multiple containers\n" +
-      "GET /error - Start a container that errors (demonstrates error handling)\n" +
-      "GET /singleton - Get a single specific container instance",
-  );
-});
+  .get("/api/players", async () => {
+    try {
+      const container = getMinecraftContainer();
+      const response = await container.fetch(new Request("http://localhost/rcon/players"));
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      return { players: [], error: "Failed to get players" };
+    }
+  })
 
-// Route requests to a specific container using the container ID
-app.get("/container/:id", async (c) => {
-  const id = c.req.param("id");
-  const containerId = c.env.MINECRAFT_CONTAINER.idFromName(`/container/${id}`);
-  const container = c.env.MINECRAFT_CONTAINER.get(containerId);
-  return await container.fetch('http://localhost:8080/healthz');
-});
+  .get("/api/container/:id", async ({ params }: any) => {
+    try {
+      const id = params.id;
+      const containerId = env.MINECRAFT_CONTAINER.idFromName(`/container/${id}`);
+      const container = env.MINECRAFT_CONTAINER.get(containerId);
+      
+      // Get both health and RCON status
+      const healthResponse = await container.fetch("http://localhost/healthz");
+      const statusResponse = await container.fetch("http://localhost/rcon/status");
+      const rconStatus = await statusResponse.json<any>();
+      
+      return {
+        id,
+        health: healthResponse.ok,
+        ...rconStatus
+      };
+    } catch (error) {
+      return { id: params.id, online: false, error: "Failed to get container info" };
+    }
+  })
 
-// Demonstrate error handling - this route forces a panic in the container
-app.get("/error", async (c) => {
-  const container = getContainer(c.env.MINECRAFT_CONTAINER, "error-test");
-  return await container.fetch(c.req.raw);
-});
+  .get("/api/info", async () => {
+    try {
+      const container = getMinecraftContainer();
+      const response = await container.fetch(new Request("http://localhost/rcon/info"));
+      const info = await response.json();
+      return info;
+    } catch (error) {
+      return { error: "Failed to get server info" };
+    }
+  })
+  .compile()
 
-// Load balance requests across multiple containers
-app.get("/lb", async (c) => {
-  const container = await getRandom(c.env.MINECRAFT_CONTAINER, 3);
-  return await container.fetch(c.req.raw);
-});
+export { MinecraftContainer } from "./container";
 
-// Get a single container instance (singleton pattern)
-app.get("/singleton", async (c) => {
-  const container = getContainer(c.env.MINECRAFT_CONTAINER);
-  return await container.fetch(c.req.raw);
-});
+export default {
+  fetch(request: Request, env: typeof worker.Env): Response | Promise<Response> {
+    if(request.url.endsWith('/ws')) {
+      return this.handleWebSocket(request, env);
+    }
+    return elysiaApp.fetch(request);
+  },
 
-export default app;
+  handleWebSocket(request: Request, env: typeof worker.Env): Response | Promise<Response> {
+     // Expect to receive a WebSocket Upgrade request.
+      // If there is one, accept the request and return a WebSocket Response.
+      const upgradeHeader = request.headers.get("Upgrade");
+      if (!upgradeHeader || upgradeHeader !== "websocket") {
+        return new Response("Worker expected Upgrade: websocket", {
+          status: 426,
+        });
+      }
+
+      if (request.method !== "GET") {
+        return new Response("Worker expected GET method", {
+          status: 400,
+        });
+      }
+      
+      let stub = getMinecraftContainer();
+
+      return stub.fetch(request);
+  }
+};

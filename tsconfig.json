@@ -2,6 +2,7 @@
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",
+    "lib": ["ESNext"],
     "moduleResolution": "Bundler",
     "strict": true,
     "esModuleInterop": true,
@@ -9,7 +10,11 @@
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
     "types": ["@cloudflare/workers-types"],
-    "noEmit": true
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "composite": true,
+    "outDir": "./.compiled"
   },
-  "include": ["src/**/*", "types/**/*", "alchemy.run.ts"]
+  "include": ["src/**/*", "types/**/*", "alchemy.run.ts", "build_spa.ts", "index.html"]
 }
