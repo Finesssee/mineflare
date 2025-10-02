@@ -33,13 +33,26 @@ let elysiaApp = (
   )
   .get("/", () => 'foo')
   
-  // API routes for the SPA
+  /**
+   * Get the status of the Minecraft server. This always wakes the server and is the preferred way to wake the server. This may take up to 5 mins to return a value if the server is not already awake.
+   */
   .get("/api/status", async () => {
     try {
       console.log("Getting container");
       const container = getMinecraftContainer();
+      // This is the only endpoint that starts the container! But also it cannot be used if the container is shutting down.
+      const state = await container.getState();
+      if(state.status === "stopping") {
+        return { online: false };
+      }
       console.log("Starting container");
-      await container.startAndWaitForPorts();
+      await container.startAndWaitForPorts({
+        cancellationOptions: {
+          waitInterval: 250,
+          instanceGetTimeoutMS: 2000,
+          portReadyTimeoutMS: 300000
+        }
+      });
       const response = await container.fetch(new Request("http://localhost/rcon/status"));
       const status = await response.json();
       return status;
@@ -49,6 +62,9 @@ let elysiaApp = (
     }
   })
 
+  /**
+   * Get the players of the Minecraft server. This may wake the server if not already awake.
+   */
   .get("/api/players", async () => {
     try {
       const container = getMinecraftContainer();
@@ -69,7 +85,7 @@ let elysiaApp = (
       // Get both health and RCON status
       const healthResponse = await container.fetch("http://localhost/healthz");
       const statusResponse = await container.fetch("http://localhost/rcon/status");
-      const rconStatus = await statusResponse.json<any>();
+      const rconStatus = await statusResponse.json() as any;
       
       return {
         id,
@@ -81,6 +97,9 @@ let elysiaApp = (
     }
   })
 
+  /**
+   * Get the info of the Minecraftserver. This may wake the server if not already awake.
+   */
   .get("/api/info", async () => {
     try {
       const container = getMinecraftContainer();
@@ -89,6 +108,75 @@ let elysiaApp = (
       return info;
     } catch (error) {
       return { error: "Failed to get server info" };
+    }
+  })
+
+  /**
+   * Get the Dynmap worker URL for iframe embedding
+   */
+  .get("/api/dynmap-url", () => {
+    return { url: env.DYNMAP_WORKER_URL };
+  })
+
+  /**
+   * Get the state of the container ("running" | "stopping" | "stopped" | "healthy" | "stopped_with_code"). This does not wake the container.
+   */
+  .get("/api/getState", async () => {
+    const container = getMinecraftContainer();
+    // lastChange: number
+    // status: "running" | "stopping" | "stopped" | "healthy" | "stopped_with_code"
+    const { lastChange, status } = await container.getState();
+    return { lastChange, status };
+  })
+
+  /**
+   * Get the plugin state. Works when container is stopped.
+   */
+  .get("/api/plugins", async () => {
+    try {
+      const container = getMinecraftContainer();
+      const plugins = await container.getPluginState();
+      return { plugins };
+    } catch (error) {
+      console.error("Failed to get plugin state:", error);
+      return { plugins: [], error: "Failed to get plugin state" };
+    }
+  })
+
+  /**
+   * Enable or disable a plugin. Works when container is stopped.
+   */
+  .post("/api/plugins/:filename", async ({ params, body }: any) => {
+    try {
+      const container = getMinecraftContainer();
+      const { filename } = params;
+      const { enabled } = body as { enabled: boolean };
+      
+      if (enabled) {
+        await container.enablePlugin({ filename });
+      } else {
+        await container.disablePlugin({ filename });
+      }
+      
+      // Return updated plugin state
+      const plugins = await container.getPluginState();
+      return { success: true, plugins };
+    } catch (error) {
+      console.error("Failed to toggle plugin:", error);
+      return { success: false, error: error instanceof Error ? error.message : "Failed to toggle plugin" };
+    }
+  })
+  
+  .post("/api/shutdown", async () => {
+    try {
+      const container = getMinecraftContainer();
+      await container.stop();
+      container.getState();
+      
+      return { success: true };
+    } catch (error) {
+      console.error("Failed to shutdown container:", error);
+      return { success: false, error: "Failed to shutdown container" };
     }
   })
   .compile()

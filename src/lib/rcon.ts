@@ -304,8 +304,6 @@ class Rcon {
           str = str.substring(0, str.length - 1);
         }
 
-        str = str.split('/').join('\n/').trim();
-
         console.log("processing data", str);
 
         const pending = this.pendingRequests.get(id);

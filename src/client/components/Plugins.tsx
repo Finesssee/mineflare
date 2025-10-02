@@ -1,0 +1,424 @@
+import { useState, useEffect } from 'preact/hooks';
+import type { Plugin } from '../types/api';
+import { fetchApi } from '../utils/api';
+
+interface Props {
+  serverState: 'stopped' | 'starting' | 'running' | 'stopping';
+  onPluginToggle: (filename: string, enabled: boolean) => Promise<void>;
+}
+
+const PLUGIN_INFO: Record<string, { emoji: string; description: string }> = {
+  'Dynmap-3.7-beta-11-spigot': {
+    emoji: '🗺️',
+    description: 'DynMap powers the minimap feature and shows a live map of your world. Learn more at dynmap.wiki.gg'
+  },
+  'playit-minecraft-plugin': {
+    emoji: '🌐',
+    description: 'playit.gg allows you to connect your private servers to public URLs so that your friends can join your games.'
+  }
+};
+
+export function Plugins({ serverState, onPluginToggle }: Props) {
+  const [plugins, setPlugins] = useState<Plugin[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [hoveredInfo, setHoveredInfo] = useState<string | null>(null);
+  const [hoveredWarning, setHoveredWarning] = useState<string | null>(null);
+  const [hoveredToggle, setHoveredToggle] = useState<string | null>(null);
+  const [toggling, setToggling] = useState<string | null>(null);
+
+  const fetchPlugins = async () => {
+    try {
+      setLoading(true);
+      const response = await fetchApi('/api/plugins');
+      const data = await response.json() as { plugins: Plugin[] };
+      setPlugins(data.plugins || []);
+    } catch (error) {
+      console.error('Failed to fetch plugins:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPlugins();
+  }, [serverState]);
+
+  const handleToggle = async (filename: string, currentState: string) => {
+    if (serverState !== 'stopped') return;
+    
+    // Use the same logic as isPluginEnabled to determine current toggle state
+    const isEnabled = currentState === 'ENABLED' || currentState === 'DISABLED_WILL_ENABLE_AFTER_RESTART';
+    const newEnabled = !isEnabled;
+    
+    try {
+      setToggling(filename);
+      await onPluginToggle(filename, newEnabled);
+      await fetchPlugins();
+    } catch (error) {
+      console.error('Failed to toggle plugin:', error);
+    } finally {
+      setToggling(null);
+    }
+  };
+
+  const getWarningTooltip = (state: string): string | null => {
+    if (state === 'DISABLED_WILL_ENABLE_AFTER_RESTART') {
+      return 'Will be enabled after server restart';
+    }
+    if (state === 'ENABLED_WILL_DISABLE_AFTER_RESTART') {
+      return 'Will be disabled after server restart';
+    }
+    return null;
+  };
+
+  const isTransitionalState = (state: string) => {
+    return state === 'DISABLED_WILL_ENABLE_AFTER_RESTART' || state === 'ENABLED_WILL_DISABLE_AFTER_RESTART';
+  };
+
+  const isPluginEnabled = (state: string) => {
+    return state === 'ENABLED' || state === 'DISABLED_WILL_ENABLE_AFTER_RESTART';
+  };
+
+  const canToggle = serverState === 'stopped';
+
+  if (loading && plugins.length === 0) {
+    return (
+      <div style={{
+        background: 'rgba(26, 46, 30, 0.4)',
+        backdropFilter: 'blur(10px)',
+        border: '1px solid rgba(87, 166, 78, 0.2)',
+        borderRadius: '16px',
+        padding: '32px',
+        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+      }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#888',
+          fontSize: '1rem',
+        }}>
+          <span style={{ marginRight: '10px', fontSize: '1.5rem' }}>⏳</span>
+          Loading plugins...
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      background: 'rgba(26, 46, 30, 0.4)',
+      backdropFilter: 'blur(10px)',
+      border: '1px solid rgba(87, 166, 78, 0.2)',
+      borderRadius: '16px',
+      padding: '32px',
+      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+      transition: 'all 0.3s ease',
+    }}
+    onMouseEnter={(e) => {
+      e.currentTarget.style.borderColor = 'rgba(87, 166, 78, 0.4)';
+      e.currentTarget.style.transform = 'translateY(-4px)';
+      e.currentTarget.style.boxShadow = '0 12px 40px rgba(0, 0, 0, 0.4)';
+    }}
+    onMouseLeave={(e) => {
+      e.currentTarget.style.borderColor = 'rgba(87, 166, 78, 0.2)';
+      e.currentTarget.style.transform = 'translateY(0)';
+      e.currentTarget.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.3)';
+    }}
+    >
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        marginBottom: '24px',
+      }}>
+        <div style={{
+          width: '48px',
+          height: '48px',
+          borderRadius: '12px',
+          background: 'linear-gradient(135deg, #4682B4 0%, #5B9BD5 100%)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '1.5rem',
+          marginRight: '16px',
+          boxShadow: '0 4px 12px rgba(70, 130, 180, 0.3)',
+        }}>
+          🔌
+        </div>
+        <div>
+          <h2 style={{
+            margin: '0 0 4px 0',
+            fontSize: '1.5rem',
+            fontWeight: '700',
+            color: '#fff',
+          }}>
+            Server Plugins
+          </h2>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}>
+            <span style={{
+              color: canToggle ? '#55FF55' : '#888',
+              fontWeight: '600',
+              fontSize: '0.875rem',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+            }}>
+              {canToggle ? 'Editable' : 'Stop server to edit'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
+      }}>
+        {plugins.map((plugin) => {
+          const info = PLUGIN_INFO[plugin.filename];
+          const enabled = isPluginEnabled(plugin.state);
+          const transitional = isTransitionalState(plugin.state);
+          const warningTooltip = getWarningTooltip(plugin.state);
+          const isDynmap = plugin.filename === 'Dynmap-3.7-beta-11-spigot';
+          const isTogglingThis = toggling === plugin.filename;
+
+          return (
+            <div
+              key={plugin.filename}
+              style={{
+                background: 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '12px',
+                padding: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                transition: 'all 0.2s ease',
+                opacity: isTogglingThis ? 0.6 : 1,
+              }}
+            >
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                flex: 1,
+              }}>
+                <span style={{ fontSize: '1.5rem' }}>
+                  {info?.emoji || '🔌'}
+                </span>
+                <div style={{ flex: 1 }}>
+                  <div style={{
+                    color: '#fff',
+                    fontWeight: '600',
+                    fontSize: '0.9375rem',
+                    marginBottom: '2px',
+                  }}>
+                    {plugin.displayName}
+                  </div>
+                  <div style={{
+                    color: '#888',
+                    fontSize: '0.75rem',
+                  }}>
+                    {enabled ? 'Active' : 'Inactive'}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+              }}>
+                {/* Warning icon for transitional states (only show when server is running) */}
+                {transitional && warningTooltip && serverState === 'running' && (
+                  <div
+                    style={{
+                      position: 'relative',
+                      cursor: 'help',
+                    }}
+                    onMouseEnter={() => setHoveredWarning(plugin.filename)}
+                    onMouseLeave={() => setHoveredWarning(null)}
+                  >
+                    <span style={{
+                      fontSize: '1.125rem',
+                      color: '#FFB600',
+                    }}>
+                      ⚠️
+                    </span>
+                    {hoveredWarning === plugin.filename && (
+                      <div style={{
+                        position: 'absolute',
+                        bottom: '100%',
+                        right: '0',
+                        marginBottom: '8px',
+                        padding: '8px 12px',
+                        background: 'rgba(0, 0, 0, 0.95)',
+                        border: '1px solid rgba(255, 182, 0, 0.3)',
+                        borderRadius: '8px',
+                        color: '#FFB600',
+                        fontSize: '0.75rem',
+                        whiteSpace: 'nowrap',
+                        zIndex: 1000,
+                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+                      }}>
+                        {warningTooltip}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Info button */}
+                {info && (
+                  <div
+                    style={{
+                      position: 'relative',
+                      cursor: 'help',
+                    }}
+                    onMouseEnter={() => setHoveredInfo(plugin.filename)}
+                    onMouseLeave={() => setHoveredInfo(null)}
+                  >
+                    <div style={{
+                      width: '24px',
+                      height: '24px',
+                      borderRadius: '50%',
+                      background: 'rgba(87, 166, 78, 0.2)',
+                      border: '1px solid rgba(87, 166, 78, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '0.75rem',
+                      color: '#57A64E',
+                      fontWeight: '700',
+                      transition: 'all 0.2s ease',
+                    }}>
+                      ⓘ
+                    </div>
+                    {hoveredInfo === plugin.filename && (
+                      <div style={{
+                        position: 'absolute',
+                        bottom: '100%',
+                        right: '0',
+                        marginBottom: '8px',
+                        padding: '12px',
+                        background: 'rgba(0, 0, 0, 0.95)',
+                        border: '1px solid rgba(87, 166, 78, 0.3)',
+                        borderRadius: '8px',
+                        color: '#b0b0b0',
+                        fontSize: '0.75rem',
+                        width: '250px',
+                        zIndex: 1000,
+                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+                        lineHeight: '1.4',
+                      }}>
+                        {info.description}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Toggle switch */}
+                <div style={{ position: 'relative' }}>
+                  <button
+                    onClick={() => !isDynmap && handleToggle(plugin.filename, plugin.state)}
+                    disabled={!canToggle || isDynmap || isTogglingThis}
+                    style={{
+                      position: 'relative',
+                      width: '48px',
+                      height: '24px',
+                      borderRadius: '12px',
+                      background: enabled 
+                        ? 'linear-gradient(135deg, #57A64E 0%, #6BB854 100%)' 
+                        : 'rgba(120, 120, 120, 0.3)',
+                      border: enabled 
+                        ? '2px solid rgba(87, 166, 78, 0.5)' 
+                        : '2px solid rgba(160, 160, 160, 0.4)',
+                      cursor: (canToggle && !isDynmap && !isTogglingThis) ? 'pointer' : 'not-allowed',
+                      transition: 'all 0.3s ease',
+                      padding: 0,
+                      opacity: (!canToggle || isDynmap) ? 0.5 : 1,
+                      overflow: 'visible',
+                    }}
+                    onMouseEnter={(e) => {
+                      setHoveredToggle(plugin.filename);
+                      if (canToggle && !isDynmap && !isTogglingThis && !enabled) {
+                        e.currentTarget.style.background = 'rgba(140, 140, 140, 0.4)';
+                        e.currentTarget.style.borderColor = 'rgba(180, 180, 180, 0.5)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      setHoveredToggle(null);
+                      if (!enabled) {
+                        e.currentTarget.style.background = 'rgba(120, 120, 120, 0.3)';
+                        e.currentTarget.style.borderColor = 'rgba(160, 160, 160, 0.4)';
+                      }
+                    }}
+                  >
+                  {/* Dynmap required overlay */}
+                  {isDynmap && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '50%',
+                      left: '50%',
+                      transform: 'translate(-50%, -50%) rotate(-12deg)',
+                      fontSize: '0.5rem',
+                      fontWeight: '800',
+                      color: '#ff9999',
+                      textShadow: '0 1px 2px rgba(0, 0, 0, 0.5)',
+                      letterSpacing: '0.02em',
+                      pointerEvents: 'none',
+                      whiteSpace: 'nowrap',
+                      zIndex: 2,
+                    }}>
+                      REQUIRED
+                    </div>
+                  )}
+                  
+                  <div style={{
+                    position: 'absolute',
+                    top: '2px',
+                    left: enabled ? 'calc(100% - 22px)' : '2px',
+                    width: '16px',
+                    height: '16px',
+                    borderRadius: '50%',
+                    background: enabled ? '#fff' : '#b0b0b0',
+                    boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
+                    transition: 'all 0.3s ease',
+                  }} />
+                </button>
+                
+                {/* Custom tooltip for toggle */}
+                {hoveredToggle === plugin.filename && (isDynmap || !canToggle) && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: '100%',
+                    right: '0',
+                    marginBottom: '8px',
+                    padding: '8px 12px',
+                    background: 'rgba(0, 0, 0, 0.95)',
+                    border: isDynmap 
+                      ? '1px solid rgba(255, 153, 153, 0.3)' 
+                      : '1px solid rgba(87, 166, 78, 0.3)',
+                    borderRadius: '8px',
+                    color: isDynmap ? '#ff9999' : '#b0b0b0',
+                    fontSize: '0.75rem',
+                    whiteSpace: 'nowrap',
+                    zIndex: 1000,
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+                    pointerEvents: 'none',
+                  }}>
+                    {isDynmap ? 'Dynmap cannot be disabled' : 'Stop the server to change plugins'}
+                  </div>
+                )}
+              </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+

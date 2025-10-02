@@ -4,20 +4,35 @@ FROM itzg/minecraft-server:latest
 
 ENV TAILSCALE_STATE_DIR=/var/lib/tailscale/tailscaled.state
 ENV SERVER_PORT=8081
+ENV TYPE=PAPER
+# Get the jar from https://www.spigotmc.org/resources/dynmap®.274/updates
+# Match the VERSION here (for minecraft version) to the compatible version of Dynmap you downloaded
+ENV VERSION=1.21.7
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
+        sudo \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && mkdir -p $(dirname "${TAILSCALE_STATE_DIR}") \
+    && mkdir -p /data/plugins \
+    && echo "minecraft ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/minecraft \
+    && chmod 0440 /etc/sudoers.d/minecraft \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-COPY container_src/start-with-services.sh /usr/local/bin/start-with-services.sh
-RUN chmod +x /usr/local/bin/start-with-services.sh
+COPY start-with-services.sh /usr/local/bin/start-with-services.sh
+COPY dynmap-configuration.txt /dynmap-configuration.txt
+COPY Dynmap-3.7-beta-11-spigot.jar /data/plugins/dynmap.jar
+COPY optional_plugins/ /data/optional_plugins/
+RUN chmod +x /usr/local/bin/start-with-services.sh \
+    && mkdir -p /run/tailscale \
+    && chown -R 1000:1000 /data \
+    && chown -R 1000:1000 /run/tailscale
 
-EXPOSE 8080 8081 25565 25575
+USER 1000:1000
+EXPOSE 8080 8081 8123 25565 25575
 
 ENTRYPOINT ["/usr/local/bin/start-with-services.sh"]
 CMD ["/image/scripts/start"]

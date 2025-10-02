@@ -1,60 +1,251 @@
-import { useState, useEffect } from 'preact/hooks';
-import type { ServerStatus, PlayerResponse, ServerInfo } from '../types/api';
+import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
+import type { ServerStatus, PlayerResponse, ServerInfo, Plugin } from '../types/api';
 import { fetchApi } from '../utils/api';
+
+type ServerState = 'stopped' | 'starting' | 'running' | 'stopping';
 
 export function useServerData() {
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [players, setPlayers] = useState<string[]>([]);
   const [info, setInfo] = useState<ServerInfo | null>(null);
+  const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [serverState, setServerState] = useState<ServerState>('stopped');
+  
+  // Track active fetch calls for concurrency safety
+  const activeFetches = useRef<Set<Promise<any>>>(new Set());
+  const shouldFetchFullData = useRef(false);
 
-  const fetchData = async () => {
-    setLoading(true);
-    setError(null);
+  // Unified polling function that handles all states
+  const poll = useCallback(async () => {
+    const fetchPromise = (async () => {
+      try {
+        // First, check the container state (doesn't wake container)
+        const stateResponse = await fetchApi(`/api/getState`);
+        const stateData = await stateResponse.json() as { status: string; lastChange: number };
+        const containerRunning = stateData.status === 'running' || stateData.status === 'healthy';
+        const containerStopping = stateData.status === 'stopping';
+        const containerStopped = stateData.status === 'stopped' || stateData.status === 'stopped_with_code';
+        
+        // If we're stopping, hold UI in 'stopping' until container is actually stopped
+        if (serverState === 'stopping') {
+          if (containerStopped || (!containerRunning && !containerStopping)) {
+            setServerState('stopped');
+            setStatus({ online: false, playerCount: 0, maxPlayers: 0 });
+            setPlayers([]);
+            shouldFetchFullData.current = false;
+          }
+          return;
+        }
 
+        if (shouldFetchFullData.current) {
+          // We want to fetch full data (user started server or it's running)
+          if (containerRunning) {
+            // Container is running, fetch full server data
+            setLoading(true);
+            setError(null);
+            
+            const statusResponse = await fetchApi(`/api/status`);
+            const statusData: ServerStatus = await statusResponse.json();
+            setStatus(statusData);
+            
+            if (statusData.online) {
+              setServerState('running');
+            }
+
+            const playersResponse = await fetchApi(`/api/players`);
+            const playersData: PlayerResponse = await playersResponse.json();
+            setPlayers(playersData.players || []);
+
+            const infoResponse = await fetchApi(`/api/info`);
+            const infoData: ServerInfo = await infoResponse.json();
+            setInfo(infoData);
+
+            // Also fetch plugins to keep state in sync
+            await fetchPlugins();
+          } else if (serverState === 'starting' && !containerStopping) {
+            // We're trying to start - call /api/status to wake the container
+            setLoading(true);
+            setError(null);
+            
+            const statusResponse = await fetchApi(`/api/status`);
+            const statusData: ServerStatus = await statusResponse.json();
+            setStatus(statusData);
+            
+            if (statusData.online) {
+              setServerState('running');
+              
+              // Also fetch players and info
+              const playersResponse = await fetchApi(`/api/players`);
+              const playersData: PlayerResponse = await playersResponse.json();
+              setPlayers(playersData.players || []);
+
+              const infoResponse = await fetchApi(`/api/info`);
+              const infoData: ServerInfo = await infoResponse.json();
+              setInfo(infoData);
+
+              // Also fetch plugins to keep state in sync
+              await fetchPlugins();
+            }
+            // If not online yet, stay in 'starting' state
+          } else if (!containerRunning && serverState === 'running') {
+            // Was running but now stopped externally
+            setServerState('stopped');
+            setStatus({ online: false, playerCount: 0, maxPlayers: 0 });
+            setPlayers([]);
+            shouldFetchFullData.current = false;
+            // Fetch plugins since we're now stopped and can edit them
+            await fetchPlugins();
+          }
+        } else {
+          // Just monitoring state changes (not actively fetching full data)
+          if (containerRunning && serverState === 'stopped') {
+            // Someone else started it
+            setServerState('starting');
+            shouldFetchFullData.current = true;
+            // Will fetch on next poll
+          } else if (!containerRunning && (serverState === 'running' || serverState === 'starting')) {
+            // Server stopped externally while we thought it was running
+            setServerState('stopped');
+            setStatus({ online: false, playerCount: 0, maxPlayers: 0 });
+            setPlayers([]);
+            // Fetch plugins since we're now stopped and can edit them
+            await fetchPlugins();
+          }
+        }
+      } catch (err) {
+        if (shouldFetchFullData.current) {
+          setError(err instanceof Error ? err.message : 'Unknown error');
+        }
+        console.log('Poll error:', err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+
+    activeFetches.current.add(fetchPromise);
     try {
-      // Fetch server status
-      const statusResponse = await fetchApi(`/api/status`);
-      const statusData: ServerStatus = await statusResponse.json();
-      setStatus(statusData);
-
-      // Fetch players
-      const playersResponse = await fetchApi(`/api/players`);
-      const playersData: PlayerResponse = await playersResponse.json();
-      setPlayers(playersData.players || []);
-
-      // Fetch server info
-      const infoResponse = await fetchApi(`/api/info`);
-      const infoData: ServerInfo = await infoResponse.json();
-      setInfo(infoData);
-
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      await fetchPromise;
     } finally {
-      setLoading(false);
+      activeFetches.current.delete(fetchPromise);
+    }
+  }, [serverState]);
+
+  const startServer = async () => {
+    setServerState('starting');
+    setError(null);
+    shouldFetchFullData.current = true;
+    
+    // Trigger immediate poll to wake the server
+    await poll();
+  };
+
+  const stopServer = async () => {
+    setServerState('stopping');
+    setError(null);
+    
+    // Stop fetching full data
+    shouldFetchFullData.current = false;
+    
+    // Wait for all active fetches to complete
+    await Promise.all(Array.from(activeFetches.current));
+    
+    // Now send the stop command
+    try {
+      const response = await fetchApi('/api/shutdown', {
+        method: 'POST'
+      });
+      const result = await response.json() as { success: boolean; error?: string };
+      
+      if (result.success) {
+        // Keep UI in 'stopping' until the container actually stops
+        setStatus({ online: false, playerCount: 0, maxPlayers: 0 });
+        setPlayers([]);
+        await poll();
+        // Fetch plugins since we're now stopped and can edit them
+        await fetchPlugins();
+      } else {
+        setError(result.error || 'Failed to stop server');
+        setServerState('running');
+        shouldFetchFullData.current = true;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to stop server');
+      setServerState('running');
+      shouldFetchFullData.current = true;
     }
   };
 
-  useEffect(() => {
-    // Initial fetch
-    fetchData();
+  const refresh = useCallback(async () => {
+    if (shouldFetchFullData.current) {
+      await poll();
+    }
+  }, [poll]);
 
-    // Set up polling every 10 seconds
-    const intervalId = setInterval(() => {
-      fetchData();
+  const fetchPlugins = useCallback(async () => {
+    try {
+      const response = await fetchApi('/api/plugins');
+      const data = await response.json() as { plugins: Plugin[] };
+      setPlugins(data.plugins || []);
+    } catch (err) {
+      console.error('Failed to fetch plugins:', err);
+    }
+  }, []);
+
+  const togglePlugin = useCallback(async (filename: string, enabled: boolean) => {
+    try {
+      const response = await fetchApi(`/api/plugins/${filename}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ enabled }),
+      });
+      
+      const result = await response.json() as { success: boolean; plugins?: Plugin[]; error?: string };
+      
+      if (result.success && result.plugins) {
+        setPlugins(result.plugins);
+      } else {
+        throw new Error(result.error || 'Failed to toggle plugin');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to toggle plugin');
+      throw err;
+    }
+  }, []);
+
+  useEffect(() => {
+    // Check server state immediately on mount
+    poll();
+    fetchPlugins();
+
+    // Set up single unified polling interval
+    const pollInterval = setInterval(() => {
+      // Only start a new poll if there are no active fetches
+      if (activeFetches.current.size === 0) {
+        poll();
+      }
     }, 10000);
 
-    // Cleanup interval on unmount
-    return () => clearInterval(intervalId);
-  }, []);
+    return () => {
+      clearInterval(pollInterval);
+    };
+  }, [poll, fetchPlugins]);
 
   return {
     status,
     players,
     info,
+    plugins,
     loading,
     error,
-    refresh: fetchData
+    serverState,
+    startServer,
+    stopServer,
+    refresh,
+    fetchPlugins,
+    togglePlugin
   };
 }

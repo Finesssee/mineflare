@@ -16,5 +16,5 @@
     "composite": true,
     "outDir": "./.compiled"
   },
-  "include": ["src/**/*", "types/**/*", "alchemy.run.ts", "build_spa.ts", "index.html"]
+  "include": ["src/**/*", "types/**/*", "alchemy.run.ts", "index.html"]
 }

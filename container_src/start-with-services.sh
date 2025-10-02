@@ -1,12 +1,48 @@
 #!/bin/bash
 set -euo pipefail
 
+do_optional_plugins() {
+  # Temporarily disable exit-on-error for this function
+  set +e
+  
+  if [ -n "${OPTIONAL_PLUGINS:-}" ]; then
+    # Handle the case where OPTIONAL_PLUGINS is an empty string
+    for plugin in $OPTIONAL_PLUGINS; do
+      # Skip empty plugin names (can happen if OPTIONAL_PLUGINS is just "")
+      if [ -z "$plugin" ]; then
+        continue
+      fi
+      src="/data/optional_plugins/${plugin}.jar"
+      dest="/data/plugins/${plugin}.jar"
+      
+      # Wrap operations in error handling
+      if [ -f "$src" ]; then
+        # Only create the symlink if it doesn't already exist or points elsewhere
+        if [ ! -L "$dest" ] || [ "$(readlink "$dest")" != "$src" ]; then
+          if ln -sf "$src" "$dest" 2>/dev/null; then
+            echo "Optional plugin $plugin linked successfully"
+          else
+            echo "Warning: Failed to link optional plugin $plugin: $src -> $dest (continuing anyway)"
+          fi
+        else
+          echo "Optional plugin $plugin already linked"
+        fi
+      else
+        echo "Warning: Optional plugin $src not found, skipping."
+      fi
+    done
+  fi
+  
+  # Re-enable exit-on-error
+  set -e
+}
 start_tailscale() {
+
+
+
   if ! command -v tailscaled >/dev/null 2>&1; then
     return
   fi
-
-  mkdir -p /run/tailscale
 
   TAILSCALE_SOCKET="${TAILSCALE_SOCKET:-/run/tailscale/tailscaled.sock}"
   TAILSCALE_STATE_DIR="${TAILSCALE_STATE_DIR:-/var/lib/tailscale/tailscaled.state}"
@@ -28,20 +64,20 @@ start_tailscale() {
     # Run in userspace mode for container compatibility
     TAILSCALED_ARGS="${TAILSCALED_ARGS} --tun=userspace-networking"
     
-    /usr/sbin/tailscaled ${TAILSCALED_ARGS} &
+    sudo /usr/sbin/tailscaled ${TAILSCALED_ARGS} &
   fi
 
   if [ -n "${AUTHKEY}" ]; then
     # Wait for tailscaled to be ready before running tailscale up
     for i in $(seq 1 20); do
-      if tailscale --socket="${TAILSCALE_SOCKET}" status >/dev/null 2>&1; then
+      if sudo tailscale --socket="${TAILSCALE_SOCKET}" status >/dev/null 2>&1; then
         break
       fi
       sleep 0.5
     done
 
     echo "Connecting to Tailscale network..."
-    tailscale --socket="${TAILSCALE_SOCKET}" up \
+    sudo tailscale --socket="${TAILSCALE_SOCKET}" up \
       --authkey="${AUTHKEY}" \
       --accept-routes=false \
       --accept-dns=false \
@@ -57,10 +93,36 @@ start_tailscale() {
   fi
 }
 
+configure_dynmap() {
+  if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${DYNMAP_BUCKET:-}" ]; then
+    echo "Skipping Dynmap S3 configuration (no R2 credentials found)"
+    return
+  fi
+
+  echo "Configuring Dynmap for S3 storage..."
+  mkdir -p /data/plugins/dynmap
+
+  # Copy the template configuration and substitute placeholders
+  sed -e "s|{{AWS_ENDPOINT_URL}}|${AWS_ENDPOINT_URL}|g" \
+      -e "s|{{DYNMAP_BUCKET}}|${DYNMAP_BUCKET}|g" \
+      -e "s|{{AWS_ACCESS_KEY_ID}}|${AWS_ACCESS_KEY_ID}|g" \
+      -e "s|{{AWS_SECRET_ACCESS_KEY}}|${AWS_SECRET_ACCESS_KEY}|g" \
+      /dynmap-configuration.txt > /data/plugins/dynmap/configuration.txt
+
+  echo "Dynmap S3 configuration complete"
+  cat /data/plugins/dynmap/configuration.txt
+}
+
 echo "Starting services..."
+
+# Install optional plugins
+do_optional_plugins || true
 
 # Start Tailscale in background
 start_tailscale
+
+# Configure Dynmap if R2 credentials are available
+configure_dynmap
 
 echo "Services started, launching main application..."
 echo "Command: $@"

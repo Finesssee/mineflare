@@ -11,6 +11,7 @@ export interface PlayerResponse {
 }
 
 export interface ServerInfo {
+  serverType?: string;
   version?: string;
   versionName?: string;
   versionId?: string;
@@ -32,4 +33,16 @@ export interface ContainerInfo {
   playerCount?: number;
   maxPlayers?: number;
   error?: string;
+}
+
+export type PluginState = 'ENABLED' | 'DISABLED_WILL_ENABLE_AFTER_RESTART' | 'ENABLED_WILL_DISABLE_AFTER_RESTART' | 'DISABLED';
+
+export interface Plugin {
+  filename: string;
+  displayName: string;
+  state: PluginState;
+}
+
+export interface PluginsResponse {
+  plugins: Plugin[];
 }

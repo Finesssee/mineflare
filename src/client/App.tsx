@@ -2,9 +2,19 @@ import { ServerStatus } from './components/ServerStatus';
 import { PlayerList } from './components/PlayerList';
 import { useServerData } from './hooks/useServerData';
 import { Terminal } from './components/Terminal';
+import { Minimap } from './components/Minimap';
+import { Plugins } from './components/Plugins';
+
+try {
+  if (process.env.NODE_ENV === 'development') {
+    import.meta.hot.accept();
+  }
+} catch (error) {
+  // ignore
+}
 
 export function App() {
-  const { status, players, info, loading, error, refresh } = useServerData();
+  const { status, players, info, plugins, loading, error, serverState, startServer, stopServer, refresh, togglePlugin } = useServerData();
 
   return (
     <div style={{
@@ -21,6 +31,7 @@ export function App() {
         margin: '0 auto',
         padding: '60px 20px 40px',
         textAlign: 'center',
+        position: 'relative',
       }}>
         <h1 style={{
           fontSize: 'clamp(2.5rem, 6vw, 4rem)',
@@ -32,7 +43,7 @@ export function App() {
           backgroundClip: 'text',
           letterSpacing: '-0.02em',
         }}>
-          Minecraft Server
+          Cloudflare Minecraft Server
         </h1>
         
         <div style={{
@@ -53,44 +64,46 @@ export function App() {
             Real-time server monitoring and control
           </p>
           
-          <button 
-            onClick={refresh} 
-            disabled={loading}
-            title={loading ? "Refreshing..." : "Refresh now"}
-            style={{
-              width: '32px',
-              height: '32px',
-              padding: '0',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '1.125rem',
-              background: 'rgba(87, 166, 78, 0.15)',
-              color: loading ? '#7cbc73' : '#57A64E',
-              border: '1px solid rgba(87, 166, 78, 0.3)',
-              borderRadius: '50%',
-              cursor: loading ? 'default' : 'pointer',
-              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-              animation: loading ? 'spin 2s cubic-bezier(0.4, 0, 0.2, 1) infinite' : 'none',
-              flexShrink: 0,
-            }}
-            onMouseEnter={(e) => {
-              if (!loading) {
-                e.currentTarget.style.background = 'rgba(87, 166, 78, 0.25)';
-                e.currentTarget.style.borderColor = 'rgba(87, 166, 78, 0.5)';
-                e.currentTarget.style.transform = 'scale(1.1)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (!loading) {
-                e.currentTarget.style.background = 'rgba(87, 166, 78, 0.15)';
-                e.currentTarget.style.borderColor = 'rgba(87, 166, 78, 0.3)';
-                e.currentTarget.style.transform = 'scale(1)';
-              }
-            }}
-          >
-            ↻
-          </button>
+          {serverState === 'running' && (
+            <button 
+              onClick={refresh} 
+              disabled={loading}
+              title={loading ? "Refreshing..." : "Refresh now"}
+              style={{
+                width: '32px',
+                height: '32px',
+                padding: '0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1.125rem',
+                background: 'rgba(87, 166, 78, 0.15)',
+                color: loading ? '#7cbc73' : '#57A64E',
+                border: '1px solid rgba(87, 166, 78, 0.3)',
+                borderRadius: '50%',
+                cursor: loading ? 'default' : 'pointer',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                animation: loading ? 'spin 2s cubic-bezier(0.4, 0, 0.2, 1) infinite' : 'none',
+                flexShrink: 0,
+              }}
+              onMouseEnter={(e) => {
+                if (!loading) {
+                  e.currentTarget.style.background = 'rgba(87, 166, 78, 0.25)';
+                  e.currentTarget.style.borderColor = 'rgba(87, 166, 78, 0.5)';
+                  e.currentTarget.style.transform = 'scale(1.1)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!loading) {
+                  e.currentTarget.style.background = 'rgba(87, 166, 78, 0.15)';
+                  e.currentTarget.style.borderColor = 'rgba(87, 166, 78, 0.3)';
+                  e.currentTarget.style.transform = 'scale(1)';
+                }
+              }}
+            >
+              ↻
+            </button>
+          )}
         </div>
         
         <style>{`
@@ -113,6 +126,170 @@ export function App() {
             ⚠️ Error: {error}
           </div>
         )}
+
+        {/* Start/Stop Button */}
+        {serverState === 'stopped' ? (
+          <div style={{
+            marginTop: '40px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '16px',
+          }}>
+            <button
+              onClick={startServer}
+              disabled={loading}
+              style={{
+                fontSize: 'clamp(1.125rem, 2.5vw, 1.5rem)',
+                fontWeight: '700',
+                padding: 'clamp(16px, 3vw, 24px) clamp(48px, 8vw, 80px)',
+                background: loading ? 'rgba(87, 166, 78, 0.5)' : 'linear-gradient(135deg, #55FF55 0%, #57A64E 100%)',
+                color: '#0a1612',
+                border: 'none',
+                borderRadius: '12px',
+                cursor: loading ? 'default' : 'pointer',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                boxShadow: '0 8px 32px rgba(85, 255, 85, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                opacity: loading ? 0.7 : 1,
+              }}
+              onMouseEnter={(e) => {
+                if (!loading) {
+                  e.currentTarget.style.transform = 'translateY(-2px) scale(1.02)';
+                  e.currentTarget.style.boxShadow = '0 12px 48px rgba(85, 255, 85, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.2)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!loading) {
+                  e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                  e.currentTarget.style.boxShadow = '0 8px 32px rgba(85, 255, 85, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1)';
+                }
+              }}
+            >
+              ▶ Start Server
+            </button>
+            <p style={{
+              fontSize: '0.9rem',
+              color: '#888',
+              margin: '0',
+              textAlign: 'center',
+            }}>
+              Click to start the Minecraft server
+            </p>
+          </div>
+        ) : serverState === 'starting' ? (
+          <div style={{
+            marginTop: '40px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '16px',
+          }}>
+            <div style={{
+              fontSize: 'clamp(1.125rem, 2.5vw, 1.5rem)',
+              fontWeight: '700',
+              padding: 'clamp(16px, 3vw, 24px) clamp(48px, 8vw, 80px)',
+              background: 'rgba(255, 182, 0, 0.15)',
+              color: '#FFB600',
+              border: '2px solid rgba(255, 182, 0, 0.3)',
+              borderRadius: '12px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              animation: 'pulse 2s ease-in-out infinite',
+            }}>
+              ⏳ Starting Server...
+            </div>
+            <p style={{
+              fontSize: '0.9rem',
+              color: '#888',
+              margin: '0',
+              textAlign: 'center',
+            }}>
+              This may take up to 5 minutes
+            </p>
+          </div>
+        ) : serverState === 'stopping' ? (
+          <div style={{
+            marginTop: '40px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '16px',
+          }}>
+            <div style={{
+              fontSize: 'clamp(1.125rem, 2.5vw, 1.5rem)',
+              fontWeight: '700',
+              padding: 'clamp(16px, 3vw, 24px) clamp(48px, 8vw, 80px)',
+              background: 'rgba(255, 107, 107, 0.15)',
+              color: '#ff6b6b',
+              border: '2px solid rgba(255, 107, 107, 0.3)',
+              borderRadius: '12px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              animation: 'pulse 2s ease-in-out infinite',
+            }}>
+              ⏹ Stopping Server...
+            </div>
+            <p style={{
+              fontSize: '0.9rem',
+              color: '#888',
+              margin: '0',
+              textAlign: 'center',
+            }}>
+              Shutting down gracefully
+            </p>
+          </div>
+        ) : (
+          <div style={{
+            position: 'absolute',
+            top: '20px',
+            right: '20px',
+            zIndex: 10,
+          }}>
+            <button
+              onClick={stopServer}
+              disabled={loading}
+              style={{
+                fontSize: '0.875rem',
+                fontWeight: '600',
+                padding: '8px 20px',
+                background: loading ? 'rgba(255, 107, 107, 0.1)' : 'rgba(255, 107, 107, 0.15)',
+                color: '#ff6b6b',
+                border: '1px solid rgba(255, 107, 107, 0.3)',
+                borderRadius: '8px',
+                cursor: loading ? 'default' : 'pointer',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                opacity: loading ? 0.6 : 1,
+              }}
+              onMouseEnter={(e) => {
+                if (!loading) {
+                  e.currentTarget.style.background = 'rgba(255, 107, 107, 0.25)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 107, 107, 0.5)';
+                  e.currentTarget.style.transform = 'scale(1.05)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!loading) {
+                  e.currentTarget.style.background = 'rgba(255, 107, 107, 0.15)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 107, 107, 0.3)';
+                  e.currentTarget.style.transform = 'scale(1)';
+                }
+              }}
+            >
+              ⏹ Stop Server
+            </button>
+          </div>
+        )}
+
+        <style>{`
+          @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(0.98); }
+          }
+        `}</style>
 
         {/* Stats Bar */}
         <div style={{
@@ -187,6 +364,28 @@ export function App() {
               Max Players
             </div>
           </div>
+
+          <div style={{
+            textAlign: 'center',
+            padding: '15px 25px',
+          }}>
+            <div style={{
+              fontSize: '2rem',
+              fontWeight: '700',
+              color: '#5B9BD5',
+              marginBottom: '5px',
+            }}>
+              {plugins.filter(p => p.state === 'ENABLED' || p.state === 'DISABLED_WILL_ENABLE_AFTER_RESTART').length}
+            </div>
+            <div style={{
+              fontSize: '0.875rem',
+              color: '#888',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+            }}>
+              Plugins
+            </div>
+          </div>
         </div>
       </div>
 
@@ -196,18 +395,30 @@ export function App() {
         margin: '0 auto',
         padding: '0 20px 60px',
       }}>
+        {/* First Row: Server Status and Plugins */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
           gap: '24px',
           marginBottom: '24px',
         }}>
-          <ServerStatus status={status} info={info} />
+          <ServerStatus status={status} info={info} serverState={serverState} />
+          <Plugins serverState={serverState} onPluginToggle={togglePlugin} />
+        </div>
+
+        {/* Second Row: Player List (full width) */}
+        <div style={{
+          marginBottom: '24px',
+        }}>
           <PlayerList players={players} />
         </div>
 
-        <Terminal />
+        {/* Third Row: Terminal (full width) */}
+        <Terminal serverState={serverState} />
       </div>
+
+      {/* Floating Minimap */}
+      <Minimap serverState={serverState} />
     </div>
   );
 }
