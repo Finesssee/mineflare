@@ -15,6 +15,7 @@ export class MinecraftContainer extends Container<{
 }> {
 
     private lastRconSuccess: Date | null = null;
+    private _isPasswordSet: boolean = false;
     // Port the container listens on (default: 8080)
     defaultPort = 8080;
     // Time before container sleeps due to inactivity (default: 30s)
@@ -58,6 +59,13 @@ export class MinecraftContainer extends Container<{
             json_data BLOB
           );
           INSERT OR IGNORE INTO state (id, json_data) VALUES (1, jsonb('{}'));
+          CREATE TABLE IF NOT EXISTS auth (
+            id INTEGER PRIMARY KEY,
+            salt TEXT,
+            password_hash TEXT,
+            sym_key TEXT,
+            created_at INTEGER
+          );
         `);
       }
       return this.ctx.storage.sql;
@@ -75,7 +83,19 @@ export class MinecraftContainer extends Container<{
           );
         }
         this._container = ctx.container;
-        // this._initializeSql();
+        // Initialize SQL immediately so we can synchronously determine password status
+        this._initializeSql();
+        try {
+          const result = this._sql.exec("SELECT 1 as ok FROM auth LIMIT 1;").one();
+          this._isPasswordSet = result?.ok === 1;
+        } catch (_) {
+          this._isPasswordSet = false;
+        }
+    }
+
+    // Public async method for RPC
+    public async isPasswordSet(): Promise<boolean> {
+      return this._isPasswordSet;
     }
 
     private _pluginFilenamesToEnable: string[] | null = null;
@@ -130,6 +150,141 @@ export class MinecraftContainer extends Container<{
       this.ctx.waitUntil(this.initRcon().then(rcon => rcon?.send("dynmap fullrender world")));
     }
   
+  // =====================
+  // Authentication helpers & methods
+  // =====================
+
+  private base64urlEncode(data: ArrayBuffer | Uint8Array): string {
+    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+    let str = '';
+    for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
+    // btoa is available in Workers
+    const b64 = btoa(str);
+    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  }
+
+  private base64urlDecode(input: string): Uint8Array {
+    const b64 = input.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(input.length / 4) * 4, '=');
+    const str = atob(b64);
+    const bytes = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i);
+    return bytes;
+  }
+
+  private async derivePasswordHash(password: string, saltB64: string): Promise<string> {
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+    const saltBytes = this.base64urlDecode(saltB64);
+    const saltBuf = new Uint8Array(saltBytes).buffer as ArrayBuffer;
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', iterations: 100000, salt: saltBuf }, keyMaterial, 256);
+    return this.base64urlEncode(bits);
+  }
+
+  private generateRandomBytes(length: number): Uint8Array {
+    const arr = new Uint8Array(length);
+    crypto.getRandomValues(arr);
+    return arr;
+  }
+
+  // Async because it's easier to consume as RPC if fn is async
+  public async setupPassword({ password }: { password: string }): Promise<{ created: boolean; symKey?: string }>{
+    const run = async () => {
+      console.log("setupPassword: Starting, isPasswordSet =", this._isPasswordSet);
+      
+      // Pre-generate values outside of transaction
+      const salt = this.generateRandomBytes(16);
+      const saltB64 = this.base64urlEncode(salt);
+      const symKeyBytes = this.generateRandomBytes(32);
+      const symKeyB64 = this.base64urlEncode(symKeyBytes);
+      const hash = await this.derivePasswordHash(password, saltB64);
+
+      console.log("setupPassword: Pre-generated values ready, entering transaction");
+      
+      // Use Cloudflare's transactionSync API for atomic operations
+      const result = this.ctx.storage.transactionSync(() => {
+        const checkResult = this._sql.exec('SELECT 1 as ok FROM auth LIMIT 1;');
+        console.log("setupPassword: Transaction check, rowsRead =", checkResult.rowsRead);
+        try {
+          if(checkResult.one().ok) {
+            console.log("setupPassword: Password already exists, aborting");
+            return { created: false } as const;
+          }
+        } catch (_) {
+          // Password doesn't exist
+        }
+
+        console.log("setupPassword: No existing password, inserting new auth record");
+        const insertResult = this._sql.exec(
+          'INSERT INTO auth (id, salt, password_hash, sym_key, created_at) VALUES (1, ?, ?, ?, ?);',
+          saltB64, hash, symKeyB64, Date.now()
+        );
+        console.log("setupPassword: Insert result, rowsWritten =", insertResult.rowsWritten);
+
+        this._isPasswordSet = true;
+        return { created: true, symKey: symKeyB64 } as const;
+      });
+      
+      console.log("setupPassword: Transaction complete, result =", result);
+      return result;
+    };
+
+    // Prefer blocking concurrency if available
+    const anyCtx: any = this.ctx as any;
+    if (anyCtx && typeof anyCtx.blockConcurrencyWhile === 'function') {
+      console.log("setupPassword: Using blockConcurrencyWhile");
+      return await anyCtx.blockConcurrencyWhile(run);
+    }
+    console.log("setupPassword: No blockConcurrencyWhile, running directly");
+    return await run();
+  }
+
+  // Async because it's easier to consume as RPC if fn is async
+  public async verifyPassword({ password }: { password: string }): Promise<{ ok: boolean }>{
+    try {
+      const row = this._sql.exec('SELECT salt, password_hash FROM auth LIMIT 1;').one();
+      if (!row) {
+        return { ok: false };
+      }
+      const salt = (row.salt as string) ?? '';
+      const storedHash = (row.password_hash as string) ?? '';
+      const derived = await this.derivePasswordHash(password, salt);
+      return { ok: this.timingSafeEqualAscii(derived, storedHash) };
+    } catch (_) {
+      return { ok: false };
+    }
+  }
+
+  private timingSafeEqualAscii(a: string, b: string): boolean {
+    if (a.length !== b.length) return false;
+    let mismatch = 0;
+    for (let i = 0; i < a.length; i++) {
+      mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    }
+    return mismatch === 0;
+  }
+
+  // Async because it's easier to consume as RPC if fn is async
+  public async getSymmetricKey(): Promise<{ symKey?: string }>{
+    if (!this._isPasswordSet) return {};
+    try {
+      const row = this._sql.exec('SELECT sym_key FROM auth LIMIT 1;').one();
+      if (!row) return {};
+      return { symKey: row.sym_key as string };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  // Debug helper - clear auth (dev only)
+  public async clearAuth(): Promise<void> {
+    console.log("clearAuth: Clearing auth table");
+    this.ctx.storage.transactionSync(() => {
+      this._sql.exec('DELETE FROM auth;');
+      this._isPasswordSet = false;
+    });
+    console.log("clearAuth: Complete, isPasswordSet =", this._isPasswordSet);
+  }
+
     override onStop() {
       console.log("Container successfully shut down");
       this.ctx.waitUntil(this.disconnectRcon());
@@ -147,7 +302,7 @@ export class MinecraftContainer extends Container<{
 
         console.log("Optional plugins", this.pluginFilenamesToEnable);
         
-        if (url.pathname === '/ws') {
+        if (url.protocol.startsWith('ws') || url.pathname.startsWith('/ws')) {
           console.log('websocket')
           // Creates two ends of a WebSocket connection.
           const webSocketPair = new WebSocketPair();

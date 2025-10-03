@@ -1,28 +1,25 @@
-import { getContainer } from "@cloudflare/containers";
 import { Elysia, t } from "elysia";
 import type { worker } from "../alchemy.run";
 import { CloudflareAdapter } from 'elysia/adapter/cloudflare-worker'
-import { MinecraftContainer } from "./container";
 import { env as workerEnv } from 'cloudflare:workers'
 import cors from "@elysiajs/cors";
 import { getNodeEnv } from "./client/utils/node-env";
+import { getMinecraftContainer } from "./server/get-minecraft-container";
+import { authApp, requireAuth, decryptToken, getSymKeyCached } from "./server/auth";
 
 const env = workerEnv as typeof worker.Env;
 
-function getMinecraftContainer() {
-  return getContainer(env.MINECRAFT_CONTAINER as unknown as DurableObjectNamespace<MinecraftContainer>);
-}
 
-// Create Elysia app with proper typing for Cloudflare Workers
-let elysiaApp = (
+  // Create Elysia app with proper typing for Cloudflare Workers
+const elysiaApp = (
   getNodeEnv() === 'development'
   ? new Elysia({
       adapter: CloudflareAdapter,
       // aot: false,
     }).use(cors({
-        origin: true,
+        origin: /^http:\/\/localhost(:\d+)?$/,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
         credentials: true,
         maxAge: 86400,
     }))
@@ -36,7 +33,7 @@ let elysiaApp = (
   /**
    * Get the status of the Minecraft server. This always wakes the server and is the preferred way to wake the server. This may take up to 5 mins to return a value if the server is not already awake.
    */
-  .get("/api/status", async () => {
+  .get("/status", async () => {
     try {
       console.log("Getting container");
       const container = getMinecraftContainer();
@@ -65,7 +62,7 @@ let elysiaApp = (
   /**
    * Get the players of the Minecraft server. This may wake the server if not already awake.
    */
-  .get("/api/players", async () => {
+  .get("/players", async () => {
     try {
       const container = getMinecraftContainer();
       const response = await container.fetch(new Request("http://localhost/rcon/players"));
@@ -76,7 +73,7 @@ let elysiaApp = (
     }
   })
 
-  .get("/api/container/:id", async ({ params }: any) => {
+  .get("/container/:id", async ({ params }: any) => {
     try {
       const id = params.id;
       const containerId = env.MINECRAFT_CONTAINER.idFromName(`/container/${id}`);
@@ -100,7 +97,7 @@ let elysiaApp = (
   /**
    * Get the info of the Minecraftserver. This may wake the server if not already awake.
    */
-  .get("/api/info", async () => {
+  .get("/info", async () => {
     try {
       const container = getMinecraftContainer();
       const response = await container.fetch(new Request("http://localhost/rcon/info"));
@@ -114,14 +111,14 @@ let elysiaApp = (
   /**
    * Get the Dynmap worker URL for iframe embedding
    */
-  .get("/api/dynmap-url", () => {
+  .get("/dynmap-url", () => {
     return { url: env.DYNMAP_WORKER_URL };
   })
 
   /**
    * Get the state of the container ("running" | "stopping" | "stopped" | "healthy" | "stopped_with_code"). This does not wake the container.
    */
-  .get("/api/getState", async () => {
+  .get("/getState", async () => {
     const container = getMinecraftContainer();
     // lastChange: number
     // status: "running" | "stopping" | "stopped" | "healthy" | "stopped_with_code"
@@ -132,8 +129,8 @@ let elysiaApp = (
   /**
    * Get the plugin state. Works when container is stopped.
    */
-  .get("/api/plugins", async () => {
-    try {
+  .get("/plugins", async () => {
+    try{
       const container = getMinecraftContainer();
       const plugins = await container.getPluginState();
       return { plugins };
@@ -146,7 +143,7 @@ let elysiaApp = (
   /**
    * Enable or disable a plugin. Works when container is stopped.
    */
-  .post("/api/plugins/:filename", async ({ params, body }: any) => {
+  .post("/plugins/:filename", async ({ params, body }: any) => {
     try {
       const container = getMinecraftContainer();
       const { filename } = params;
@@ -167,7 +164,7 @@ let elysiaApp = (
     }
   })
   
-  .post("/api/shutdown", async () => {
+  .post("/shutdown", async () => {
     try {
       const container = getMinecraftContainer();
       await container.stop();
@@ -178,20 +175,40 @@ let elysiaApp = (
       console.error("Failed to shutdown container:", error);
       return { success: false, error: "Failed to shutdown container" };
     }
-  })
+  }).compile()
+
+const app = new Elysia({
+  adapter: CloudflareAdapter,
+  // aot: false,
+}).mount('/api', elysiaApp)
+  .mount('/api/auth', authApp)
   .compile()
 
 export { MinecraftContainer } from "./container";
 
 export default {
-  fetch(request: Request, env: typeof worker.Env): Response | Promise<Response> {
-    if(request.url.endsWith('/ws')) {
+  async fetch(request: Request, env: typeof worker.Env): Promise<Response> {
+    const url = new URL(request.url);
+    
+    // auth methods do not require auth
+    const skipAuth = request.method === 'OPTIONS' || url.pathname.startsWith('/api/auth/') || url.protocol.startsWith('ws') || url.pathname.startsWith('/ws')
+    
+    if (!skipAuth) {
+      const authError = await requireAuth(request);
+      if (authError) {
+        return authError;
+      }
+    }
+    
+    // Handle WebSocket
+    if(url.protocol.startsWith('ws') || url.pathname.startsWith('/ws')) {
       return this.handleWebSocket(request, env);
     }
-    return elysiaApp.fetch(request);
+    
+    return app.fetch(request);
   },
 
-  handleWebSocket(request: Request, env: typeof worker.Env): Response | Promise<Response> {
+  async handleWebSocket(request: Request, env: typeof worker.Env): Promise<Response> {
      // Expect to receive a WebSocket Upgrade request.
       // If there is one, accept the request and return a WebSocket Response.
       const upgradeHeader = request.headers.get("Upgrade");
@@ -207,8 +224,43 @@ export default {
         });
       }
       
-      let stub = getMinecraftContainer();
-
-      return stub.fetch(request);
+      // Validate WebSocket token from query parameter
+      const url = new URL(request.url);
+      const token = url.searchParams.get('token');
+      
+      if (!token) {
+        return new Response(JSON.stringify({ error: "WebSocket token required" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      
+      try {
+        const symKey = await getSymKeyCached(request);
+        if (!symKey) {
+          return new Response(JSON.stringify({ error: "Authentication not configured" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        
+        const payload = await decryptToken(symKey, token);
+        if (!payload || payload.exp <= Math.floor(Date.now() / 1000)) {
+          return new Response(JSON.stringify({ error: "Invalid or expired WebSocket token" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        
+        // Token is valid, proceed with WebSocket connection
+        let stub = getMinecraftContainer();
+        return stub.fetch(request);
+      } catch (error) {
+        console.error("WebSocket authentication error:", error);
+        return new Response(JSON.stringify({ error: "WebSocket authentication failed" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
   }
 };

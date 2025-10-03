@@ -3,7 +3,7 @@
 import alchemy from "alchemy";
 import { RandomString } from "alchemy/random";
 import { Container, R2Bucket, BunSPA, AccountApiToken, Worker } from "alchemy/cloudflare";
-import { SQLiteStateStore } from "alchemy/state";
+import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { MinecraftContainer } from "./src/container.ts";
 
 const app = await alchemy("cloudflare-container", {
@@ -115,11 +115,6 @@ export const worker = await BunSPA("minecraft-site", {
     
     // Dynmap worker URL for iframe embedding
     DYNMAP_WORKER_URL: dynmapWorker.url ?? "",
-
-    SECURE_SALT: (await RandomString("secure-salt", {
-      length: 32,
-      encoding: "base64",
-    })).value,
   },
 });
 

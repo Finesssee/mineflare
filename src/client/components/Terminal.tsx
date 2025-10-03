@@ -5,7 +5,7 @@ import { Elysia, t } from "elysia";
 import { treaty } from "@elysiajs/eden";
 import { useEffect, useMemo, useState, useRef, useCallback } from 'preact/hooks';
 import { useSignal } from "@preact/signals";
-import { apiHost } from "../utils/api";
+import { apiHost, fetchApi } from "../utils/api";
 
 // This exists for the sake of getting the type of the app
 const fakeApp = () => new Elysia()
@@ -48,9 +48,22 @@ export function Terminal({ serverState }: TerminalProps) {
 
     const api = useApp();
 
-    const connectWebSocket = useCallback(() => {
+    const connectWebSocket = useCallback(async () => {
         try {
-            const chat = api.ws.subscribe();
+            // Fetch a WebSocket token before connecting
+            const tokenResponse = await fetchApi('/api/auth/ws-token');
+            if (!tokenResponse.ok) {
+                console.error("Failed to get WebSocket token, status:", tokenResponse.status);
+                setChatError("Authentication failed. Please refresh the page.");
+                return null;
+            }
+            
+            const { token } = await tokenResponse.json() as { token: string };
+            
+            // Connect with token in URL
+            const chat = api.ws.subscribe({
+                query: { token }
+            });
             chatRef.current = chat;
 
             chat.subscribe((message) => {
@@ -92,12 +105,26 @@ export function Terminal({ serverState }: TerminalProps) {
 
             chat.on("error", (err: any) => {
                 console.error("WebSocket error:", err);
-                setChatError("Connection error: " + stringifyError(err));
+                const errString = stringifyError(err);
+                setChatError("Connection error: " + errString);
+                
+                // If it's a 401 error, reload to re-authenticate
+                if (errString.includes('401') || errString.toLowerCase().includes('unauthorized')) {
+                    console.log('WebSocket 401 error, reloading page to re-authenticate...');
+                    window.location.reload();
+                }
             });
 
-            chat.on("close", () => {
-                console.log("WebSocket closed");
-                chatRef.current = null;
+            chat.on("close", (event: any) => {
+                console.log("WebSocket closed", event);
+                
+                // Check if close was due to 401 Unauthorized
+                if (event?.code === 1008 || event?.reason?.includes('401') || event?.reason?.toLowerCase().includes('unauthorized')) {
+                    console.log('WebSocket closed with 401, reloading page to re-authenticate...');
+                    window.location.reload();
+                } else {
+                    chatRef.current = null;
+                }
             });
 
             return chat;
@@ -185,7 +212,7 @@ export function Terminal({ serverState }: TerminalProps) {
 
     // Auto-scroll to bottom when history updates
     useEffect(() => {
-        historyEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        historyEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }, [historyLength]);
 
     const sendCommand = () => {

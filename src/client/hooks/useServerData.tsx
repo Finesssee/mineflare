@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import type { ServerStatus, PlayerResponse, ServerInfo, Plugin } from '../types/api';
-import { fetchApi } from '../utils/api';
+import { fetchWithAuth } from '../utils/api';
 
 type ServerState = 'stopped' | 'starting' | 'running' | 'stopping';
 
-export function useServerData() {
+export function useServerData(isAuthenticated: boolean) {
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [players, setPlayers] = useState<string[]>([]);
   const [info, setInfo] = useState<ServerInfo | null>(null);
@@ -22,7 +22,7 @@ export function useServerData() {
     const fetchPromise = (async () => {
       try {
         // First, check the container state (doesn't wake container)
-        const stateResponse = await fetchApi(`/api/getState`);
+        const stateResponse = await fetchWithAuth(`/api/getState`);
         const stateData = await stateResponse.json() as { status: string; lastChange: number };
         const containerRunning = stateData.status === 'running' || stateData.status === 'healthy';
         const containerStopping = stateData.status === 'stopping';
@@ -46,7 +46,7 @@ export function useServerData() {
             setLoading(true);
             setError(null);
             
-            const statusResponse = await fetchApi(`/api/status`);
+            const statusResponse = await fetchWithAuth(`/api/status`);
             const statusData: ServerStatus = await statusResponse.json();
             setStatus(statusData);
             
@@ -54,11 +54,11 @@ export function useServerData() {
               setServerState('running');
             }
 
-            const playersResponse = await fetchApi(`/api/players`);
+            const playersResponse = await fetchWithAuth(`/api/players`);
             const playersData: PlayerResponse = await playersResponse.json();
             setPlayers(playersData.players || []);
 
-            const infoResponse = await fetchApi(`/api/info`);
+            const infoResponse = await fetchWithAuth(`/api/info`);
             const infoData: ServerInfo = await infoResponse.json();
             setInfo(infoData);
 
@@ -69,7 +69,7 @@ export function useServerData() {
             setLoading(true);
             setError(null);
             
-            const statusResponse = await fetchApi(`/api/status`);
+            const statusResponse = await fetchWithAuth(`/api/status`);
             const statusData: ServerStatus = await statusResponse.json();
             setStatus(statusData);
             
@@ -77,11 +77,11 @@ export function useServerData() {
               setServerState('running');
               
               // Also fetch players and info
-              const playersResponse = await fetchApi(`/api/players`);
+              const playersResponse = await fetchWithAuth(`/api/players`);
               const playersData: PlayerResponse = await playersResponse.json();
               setPlayers(playersData.players || []);
 
-              const infoResponse = await fetchApi(`/api/info`);
+              const infoResponse = await fetchWithAuth(`/api/info`);
               const infoData: ServerInfo = await infoResponse.json();
               setInfo(infoData);
 
@@ -153,7 +153,7 @@ export function useServerData() {
     
     // Now send the stop command
     try {
-      const response = await fetchApi('/api/shutdown', {
+      const response = await fetchWithAuth('/api/shutdown', {
         method: 'POST'
       });
       const result = await response.json() as { success: boolean; error?: string };
@@ -185,7 +185,7 @@ export function useServerData() {
 
   const fetchPlugins = useCallback(async () => {
     try {
-      const response = await fetchApi('/api/plugins');
+      const response = await fetchWithAuth('/api/plugins');
       const data = await response.json() as { plugins: Plugin[] };
       setPlugins(data.plugins || []);
     } catch (err) {
@@ -195,7 +195,7 @@ export function useServerData() {
 
   const togglePlugin = useCallback(async (filename: string, enabled: boolean) => {
     try {
-      const response = await fetchApi(`/api/plugins/${filename}`, {
+      const response = await fetchWithAuth(`/api/plugins/${filename}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -217,6 +217,11 @@ export function useServerData() {
   }, []);
 
   useEffect(() => {
+    // Only poll if authenticated
+    if (!isAuthenticated) {
+      return;
+    }
+    
     // Check server state immediately on mount
     poll();
     fetchPlugins();
@@ -232,7 +237,7 @@ export function useServerData() {
     return () => {
       clearInterval(pollInterval);
     };
-  }, [poll, fetchPlugins]);
+  }, [isAuthenticated, poll, fetchPlugins]);
 
   return {
     status,

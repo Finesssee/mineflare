@@ -127,10 +127,110 @@ export function Minimap({ serverState }: MinimapProps) {
 
   return (
     <>
+      {/* Enchanted glint animations */}
+      <style>{`
+        @keyframes enchantedGlint {
+          0% {
+            transform: translateX(-150%) translateY(-150%) rotate(45deg);
+            opacity: 0;
+          }
+          10% {
+            opacity: 0.8;
+          }
+          50% {
+            opacity: 0.6;
+          }
+          90% {
+            opacity: 0;
+          }
+          100% {
+            transform: translateX(150%) translateY(150%) rotate(45deg);
+            opacity: 0;
+          }
+        }
+
+        @keyframes enchantedGlintSecondary {
+          0% {
+            transform: translateX(-180%) translateY(-180%) rotate(45deg);
+            opacity: 0;
+          }
+          15% {
+            opacity: 0.5;
+          }
+          60% {
+            opacity: 0.3;
+          }
+          95% {
+            opacity: 0;
+          }
+          100% {
+            transform: translateX(180%) translateY(180%) rotate(45deg);
+            opacity: 0;
+          }
+        }
+
+        @keyframes idlePulse {
+          0%, 100% {
+            transform: scale(1);
+            filter: brightness(1);
+          }
+          50% {
+            transform: scale(1.03);
+            filter: brightness(1.15);
+          }
+        }
+
+        .minimap-button-enchanted {
+          animation: idlePulse 4s ease-in-out infinite;
+          position: relative;
+          overflow: hidden;
+        }
+
+        .minimap-button-enchanted::before,
+        .minimap-button-enchanted::after {
+          content: '';
+          position: absolute;
+          top: -50%;
+          left: -50%;
+          width: 200%;
+          height: 200%;
+          background: linear-gradient(
+            90deg,
+            transparent 0%,
+            transparent 40%,
+            rgba(255, 255, 255, 0.8) 50%,
+            transparent 60%,
+            transparent 100%
+          );
+          pointer-events: none;
+        }
+
+        .minimap-button-enchanted::before {
+          animation: enchantedGlint 7s ease-in-out 0s infinite;
+        }
+
+        .minimap-button-enchanted::after {
+          background: linear-gradient(
+            90deg,
+            transparent 0%,
+            transparent 35%,
+            rgba(255, 255, 255, 0.4) 50%,
+            transparent 65%,
+            transparent 100%
+          );
+          animation: enchantedGlintSecondary 7s ease-in-out 0.5s infinite;
+        }
+
+        .minimap-button-enchanted:hover {
+          animation: none !important;
+        }
+      `}</style>
+
       {/* Floating minimap button when collapsed */}
       {!isExpanded && (
         <button
           onClick={() => setIsExpanded(true)}
+          className="minimap-button-enchanted"
           style={{
             position: 'fixed',
             bottom: '20px',
@@ -145,17 +245,19 @@ export function Minimap({ serverState }: MinimapProps) {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            boxShadow: '0 4px 20px rgba(85, 255, 85, 0.4)',
+            boxShadow: '0 4px 20px rgba(85, 255, 85, 0.4), 0 0 0 2px rgba(255, 255, 255, 0.1)',
             transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
             zIndex: 1000,
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.transform = 'scale(1.1)';
-            e.currentTarget.style.boxShadow = '0 6px 28px rgba(85, 255, 85, 0.5)';
+            e.currentTarget.style.transform = 'scale(1.15)';
+            e.currentTarget.style.boxShadow = '0 8px 36px rgba(85, 255, 85, 0.6), 0 0 0 3px rgba(255, 255, 255, 0.2)';
+            e.currentTarget.style.filter = 'brightness(1.2)';
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.transform = 'scale(1)';
-            e.currentTarget.style.boxShadow = '0 4px 20px rgba(85, 255, 85, 0.4)';
+            e.currentTarget.style.transform = '';
+            e.currentTarget.style.boxShadow = '0 4px 20px rgba(85, 255, 85, 0.4), 0 0 0 2px rgba(255, 255, 255, 0.1)';
+            e.currentTarget.style.filter = '';
           }}
           title="Open Minimap"
         >

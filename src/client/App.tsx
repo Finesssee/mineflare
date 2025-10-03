@@ -4,6 +4,8 @@ import { useServerData } from './hooks/useServerData';
 import { Terminal } from './components/Terminal';
 import { Minimap } from './components/Minimap';
 import { Plugins } from './components/Plugins';
+import { Login } from './components/Login';
+import { useAuth } from './hooks/useAuth';
 
 try {
   if (process.env.NODE_ENV === 'development') {
@@ -14,7 +16,22 @@ try {
 }
 
 export function App() {
-  const { status, players, info, plugins, loading, error, serverState, startServer, stopServer, refresh, togglePlugin } = useServerData();
+  const auth = useAuth();
+  
+  // Only start polling server data when authenticated
+  const { status, players, info, plugins, loading, error, serverState, startServer, stopServer, refresh, togglePlugin } = useServerData(auth.authenticated);
+
+  // Show login overlay if not authenticated
+  if (!auth.authenticated) {
+    return (
+      <Login
+        passwordSet={auth.passwordSet}
+        onSetup={auth.setup}
+        onLogin={auth.login}
+        loading={auth.loading}
+      />
+    );
+  }
 
   return (
     <div style={{
