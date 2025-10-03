@@ -32,7 +32,10 @@ RUN chmod +x /usr/local/bin/start-with-services.sh \
     && chown -R 1000:1000 /run/tailscale
 
 USER 1000:1000
-EXPOSE 8080 8081 8123 25565 25575
+
+RUN sudo curl -fsSL https://raw.githubusercontent.com/eastlondoner/hteetp/main/install.sh | sh
+
+EXPOSE 8080 8081 8082 8083 8123 25575
 
 ENTRYPOINT ["/usr/local/bin/start-with-services.sh"]
 CMD ["/image/scripts/start"]

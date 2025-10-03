@@ -58,7 +58,7 @@ class Rcon {
   private defaultTimeout: number;
   private _isConnected: boolean;
 
-  constructor(tcpPort: CloudflareTcpPort, password: string, options?: RconOptions) {
+  constructor(tcpPort: CloudflareTcpPort, password: string, private stateProvider: () => Promise<'running' | 'stopping' | 'stopped' | 'starting'>, options?: RconOptions) {
     options = options || {};
 
     this.tcpPort = tcpPort;
@@ -77,11 +77,16 @@ class Rcon {
       return;
     }
 
-    const maxAttempts = 3;
+    const maxAttempts = 10;
     let lastError: Error | undefined;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       console.log(`RCON connection attempt ${attempt} of ${maxAttempts}`);
+      const state = await this.stateProvider();
+      if(state !== 'running') {
+        console.log("Server is not running, skipping RCON connection", state);
+        throw new Error("Server is not running");
+      }
       
       try {
         this.socket = this.tcpPort.connect("localhost:25575");
@@ -124,7 +129,7 @@ class Rcon {
         
         // If not the last attempt, wait before retrying
         if (attempt < maxAttempts) {
-          const delayMs = 1000 * attempt; // Exponential backoff: 1s, 2s
+          const delayMs = Math.max(5000, 1000 * attempt); // linearly increasing delay
           console.log(`Waiting ${delayMs}ms before retry...`);
           await new Promise(resolve => setTimeout(resolve, delayMs));
         }

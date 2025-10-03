@@ -29,7 +29,16 @@ const PLUGIN_SPECS = [
     displayName: 'playit.gg',
     requiredEnv: [] as Array<{ name: string; description: string }>,
     getStatus: async (container: MinecraftContainer): Promise<PluginStatus> => {
-      return { type: "warning", message: "Not yet configured" };
+
+      // need to check if we find any matching url https://playit.gg/mc/<code>" using regex
+      const logs = await container.getLogs();
+      const regex = /https:\/\/playit\.gg\/mc\/(\w+)/g;
+      const matches = logs.match(regex);
+      if(matches) {
+        return { type: "warning", message: "playit.gg is not connected. To connect, visit https://playit.gg/mc/" + matches[0].split("/")[3] };
+      } else {
+        return { type: "information", message: "playit.gg is active" };
+      }
     },
   },
 ] as const;

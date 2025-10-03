@@ -130,6 +130,83 @@ EOF
   echo "playit.gg configuration complete"
 }
 
+start_file_server() {
+  echo "Starting file server on port 8083..."
+  
+  # Create a simple Python HTTP server that serves files
+  cat > /tmp/file_server.py << 'PYEOF'
+import http.server
+import socketserver
+import os
+import sys
+
+class FileServerHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        # Remove leading slash and decode URL path
+        path = self.path.lstrip('/')
+        if not path:
+            path = '/'
+        
+        # Use absolute path
+        if not path.startswith('/'):
+            path = '/' + path
+        
+        try:
+            # Check if path exists
+            if not os.path.exists(path):
+                self.send_error(404, "File not found")
+                return
+            
+            # Check if it's a directory
+            if os.path.isdir(path):
+                self.send_error(404, "Path is a directory")
+                return
+            
+            # Try to read the file
+            with open(path, 'rb') as f:
+                content = f.read()
+            
+            # Send successful response
+            self.send_response(200)
+            self.send_header("Content-type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            
+        except PermissionError:
+            self.send_error(500, "Permission denied")
+        except Exception as e:
+            self.send_error(500, f"Internal server error: {str(e)}")
+    
+    def log_message(self, format, *args):
+        # Log to stdout
+        sys.stdout.write("[file-server] %s - - [%s] %s\n" %
+                         (self.address_string(),
+                          self.log_date_time_string(),
+                          format%args))
+
+PORT = 8083
+Handler = FileServerHandler
+
+with socketserver.TCPServer(("0.0.0.0", PORT), Handler) as httpd:
+    print(f"File server listening on port {PORT}")
+    httpd.serve_forever()
+PYEOF
+
+  # Run the file server in a background loop for auto-restart
+  (
+    while true; do
+      echo "Starting file server (attempt at $(date))"
+      python3 /tmp/file_server.py || echo "File server crashed, restarting in 2 seconds..."
+      sleep 2
+    done
+  ) &
+  
+  echo "File server started in background"
+}
+
+printenv
+
 echo "Starting services..."
 
 # Install optional plugins
@@ -142,11 +219,13 @@ start_tailscale
 configure_dynmap
 
 # Configure playit.gg if PLAYIT_SECRET is available
-configure_playit
+# configure_playit
+
+# Start the file server
+start_file_server
 
 echo "Services started, launching main application..."
 echo "Command: $@"
 
-# Execute the main command (Minecraft server)
-exec "$@"
-
+# Execute the main command (Minecraft server) & pipe to hteetp
+exec "$@" | hteetp --host 0.0.0.0 --port 8082 --size 1M --text

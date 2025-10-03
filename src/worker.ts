@@ -29,7 +29,19 @@ const elysiaApp = (
     })
   )
   .get("/", () => 'foo')
-  
+  .get("/logs", async () => {
+    console.log("Getting container");
+      const container = getMinecraftContainer();
+      // This is the only endpoint that starts the container! But also it cannot be used if the container is shutting down.
+      const state = await container.getState();
+      if(state.status !== "running") {
+        return { online: false };
+      } else {
+        console.log("Getting container");
+        const logs = await container.getLogs();
+        return { logs };
+      }
+  })
   /**
    * Get the status of the Minecraft server. This always wakes the server and is the preferred way to wake the server. This may take up to 5 mins to return a value if the server is not already awake.
    */
@@ -43,14 +55,12 @@ const elysiaApp = (
         return { online: false };
       }
       console.log("Starting container");
-      await container.startAndWaitForPorts({
-        cancellationOptions: {
-          waitInterval: 250,
-          instanceGetTimeoutMS: 2000,
-          portReadyTimeoutMS: 300000
-        }
-      });
+      await container.start();
       const response = await container.fetch(new Request("http://localhost/rcon/status"));
+      if(!response.ok) {
+        console.error("Failed to get status", response.status, await response.text());
+        return { online: false };
+      }
       const status = await response.json();
       return status;
     } catch (error) {
