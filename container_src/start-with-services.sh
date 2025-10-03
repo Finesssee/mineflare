@@ -113,6 +113,23 @@ configure_dynmap() {
   cat /data/plugins/dynmap/configuration.txt
 }
 
+configure_playit() {
+  if [ -z "${PLAYIT_SECRET:-}" ]; then
+    echo "Skipping playit.gg configuration (no PLAYIT_SECRET found)"
+    return
+  fi
+
+  echo "Configuring playit.gg..."
+  mkdir -p /data/plugins/playit-gg
+
+  # Write the config.yml file
+  cat > /data/plugins/playit-gg/config.yml << EOF
+agent-secret: '${PLAYIT_SECRET}'
+EOF
+
+  echo "playit.gg configuration complete"
+}
+
 echo "Starting services..."
 
 # Install optional plugins
@@ -123,6 +140,9 @@ start_tailscale
 
 # Configure Dynmap if R2 credentials are available
 configure_dynmap
+
+# Configure playit.gg if PLAYIT_SECRET is available
+configure_playit
 
 echo "Services started, launching main application..."
 echo "Command: $@"
