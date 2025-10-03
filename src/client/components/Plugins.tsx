@@ -306,7 +306,6 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
                 {plugin.requiredEnv.length > 0 && (
                   <button
                     onClick={() => openEnvModal(plugin, 'edit')}
-                    disabled={serverState !== 'stopped'}
                     style={{
                       width: '24px',
                       height: '24px',
@@ -317,22 +316,20 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
                       alignItems: 'center',
                       justifyContent: 'center',
                       fontSize: '0.875rem',
-                      cursor: serverState === 'stopped' ? 'pointer' : 'not-allowed',
+                      cursor: 'pointer',
                       transition: 'all 0.2s ease',
-                      opacity: serverState === 'stopped' ? 1 : 0.5,
+                      opacity: 1,
                       padding: 0,
                     }}
                     onMouseEnter={(e) => {
-                      if (serverState === 'stopped') {
-                        e.currentTarget.style.background = 'rgba(70, 130, 180, 0.3)';
-                        e.currentTarget.style.borderColor = 'rgba(70, 130, 180, 0.5)';
-                      }
+                      e.currentTarget.style.background = 'rgba(70, 130, 180, 0.3)';
+                      e.currentTarget.style.borderColor = 'rgba(70, 130, 180, 0.5)';
                     }}
                     onMouseLeave={(e) => {
                       e.currentTarget.style.background = 'rgba(70, 130, 180, 0.2)';
                       e.currentTarget.style.borderColor = 'rgba(70, 130, 180, 0.3)';
                     }}
-                    title={serverState === 'stopped' ? 'Configure environment variables' : 'Stop server to configure'}
+                    title={serverState === 'stopped' ? 'Configure environment variables' : 'View environment variables'}
                   >
                     ⚙️
                   </button>
@@ -560,7 +557,7 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
               fontWeight: '700',
               color: '#fff',
             }}>
-              {envModalMode === 'enable' ? 'Configure & Enable' : 'Environment Variables'}
+              {envModalMode === 'enable' ? 'Configure & Enable' : (serverState !== 'stopped' ? 'Environment Variables (View Only)' : 'Environment Variables')}
             </h3>
             <p style={{
               margin: '0 0 24px 0',
@@ -569,6 +566,7 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
             }}>
               {envModalPlugin.displayName}
               {envModalMode === 'enable' && ' - Please configure required environment variables to enable this plugin'}
+              {envModalMode === 'edit' && serverState !== 'stopped' && ' - Stop server to edit'}
             </p>
 
             <div style={{
