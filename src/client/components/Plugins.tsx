@@ -24,6 +24,7 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
   const [hoveredInfo, setHoveredInfo] = useState<string | null>(null);
   const [hoveredWarning, setHoveredWarning] = useState<string | null>(null);
   const [hoveredToggle, setHoveredToggle] = useState<string | null>(null);
+  const [hoveredStatus, setHoveredStatus] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
   const [envModalPlugin, setEnvModalPlugin] = useState<Plugin | null>(null);
   const [envModalMode, setEnvModalMode] = useState<'edit' | 'enable'>('edit');
@@ -149,6 +150,19 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
     return state === 'ENABLED' || state === 'DISABLED_WILL_ENABLE_AFTER_RESTART';
   };
 
+  const getStatusIcon = (status: Plugin['status']) => {
+    switch (status.type) {
+      case 'information':
+        return { icon: 'ℹ️', color: '#4682B4' };
+      case 'warning':
+        return { icon: '⚠️', color: '#FFB600' };
+      case 'alert':
+        return { icon: '🚨', color: '#FF4444' };
+      default:
+        return null;
+    }
+  };
+
   const canToggle = serverState === 'stopped';
 
   if (loading && plugins.length === 0) {
@@ -254,6 +268,7 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
           const warningTooltip = getWarningTooltip(plugin.state);
           const isDynmap = plugin.filename === 'Dynmap-3.7-beta-11-spigot';
           const isTogglingThis = toggling === plugin.filename;
+          const statusIcon = getStatusIcon(plugin.status);
 
           return (
             <div
@@ -335,6 +350,44 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
                   </button>
                 )}
 
+                {/* Plugin status icon */}
+                {statusIcon && (
+                  <div
+                    style={{
+                      position: 'relative',
+                      cursor: 'help',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '1.125rem',
+                    }}
+                    onMouseEnter={() => setHoveredStatus(plugin.filename)}
+                    onMouseLeave={() => setHoveredStatus(null)}
+                  >
+                    {statusIcon.icon}
+                    {hoveredStatus === plugin.filename && plugin.status.type !== 'no message' && (
+                      <div style={{
+                        position: 'absolute',
+                        bottom: '100%',
+                        right: '0',
+                        marginBottom: '8px',
+                        padding: '12px',
+                        background: 'rgba(0, 0, 0, 0.95)',
+                        border: `1px solid ${statusIcon.color}4D`,
+                        borderRadius: '8px',
+                        color: '#b0b0b0',
+                        fontSize: '0.75rem',
+                        width: '250px',
+                        zIndex: 1000,
+                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+                        lineHeight: '1.4',
+                      }}>
+                        {plugin.status.message}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Warning icon for transitional states (only show when server is running) */}
                 {transitional && warningTooltip && serverState === 'running' && (
                   <div
@@ -379,26 +432,15 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
                     style={{
                       position: 'relative',
                       cursor: 'help',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '1.5rem',
                     }}
                     onMouseEnter={() => setHoveredInfo(plugin.filename)}
                     onMouseLeave={() => setHoveredInfo(null)}
                   >
-                    <div style={{
-                      width: '24px',
-                      height: '24px',
-                      borderRadius: '50%',
-                      background: 'rgba(87, 166, 78, 0.2)',
-                      border: '1px solid rgba(87, 166, 78, 0.3)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '0.75rem',
-                      color: '#57A64E',
-                      fontWeight: '700',
-                      transition: 'all 0.2s ease',
-                    }}>
-                      ⓘ
-                    </div>
+                    📖
                     {hoveredInfo === plugin.filename && (
                       <div style={{
                         position: 'absolute',

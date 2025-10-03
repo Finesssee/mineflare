@@ -7,19 +7,30 @@ import { array, string } from "zod";
 const StringArraySchema = array(string());
 const DYNMAP_PLUGIN_FILENAME = 'Dynmap-3.7-beta-11-spigot';
 
+// Plugin status types
+type PluginStatus = 
+  | { type: "no message" }
+  | { type: "information"; message: string }
+  | { type: "warning"; message: string }
+  | { type: "alert"; message: string };
+
 // Plugin specifications with required environment variables
 const PLUGIN_SPECS = [
   {
     filename: 'Dynmap-3.7-beta-11-spigot',
     displayName: 'DynMap',
     requiredEnv: [] as Array<{ name: string; description: string }>,
+    getStatus: async (container: MinecraftContainer): Promise<PluginStatus> => {
+      return { type: "information", message: "Map rendering is active" };
+    },
   },
   {
     filename: 'playit-minecraft-plugin',
     displayName: 'playit.gg',
-    requiredEnv: [
-      { name: 'PLAYIT_SECRET', description: 'Your playit.gg secret token from the playit.gg dashboard' },
-    ],
+    requiredEnv: [] as Array<{ name: string; description: string }>,
+    getStatus: async (container: MinecraftContainer): Promise<PluginStatus> => {
+      return { type: "warning", message: "Not yet configured" };
+    },
   },
 ] as const;
 
@@ -93,7 +104,7 @@ export class MinecraftContainer extends Container<{
 
     constructor(ctx: DurableObject['ctx'], env: Env, options?: ContainerOptions) {
         super(ctx, env);
-    
+        console.error("constructor");
         if (ctx.container === undefined) {
           throw new Error(
             'Containers have not been enabled for this Durable Object class. Have you correctly setup your Wrangler config? More info: https://developers.cloudflare.com/containers/get-started/#configuration'
@@ -192,6 +203,7 @@ export class MinecraftContainer extends Container<{
         const result = this._sql.exec(
           `SELECT json(COALESCE(jsonb_extract(json_data, '$.pluginEnv'), jsonb('{}'))) as pluginEnv FROM state WHERE id = 1;`
         ).one();
+        console.error("pluginEnv result", result);
         if (!result) {
           return {};
         }
@@ -213,6 +225,7 @@ export class MinecraftContainer extends Container<{
 
     // Optional lifecycle hooks
     override async start() {
+      console.error("start");
       this._initializeSql();
       const newOptionalPlugins = this.pluginFilenamesToEnable.join(" ");
       if(newOptionalPlugins !== this.envVars.OPTIONAL_PLUGINS) {
@@ -221,16 +234,34 @@ export class MinecraftContainer extends Container<{
       
       // Inject configured plugin environment variables (only mutate envVars here!)
       const allPluginEnv = this.getAllConfiguredPluginEnv();
+      console.error("allPluginEnv", allPluginEnv);
       for (const [pluginFilename, envVars] of Object.entries(allPluginEnv)) {
+        console.error("pluginFilename", pluginFilename);
+        console.error("envVars", envVars);
         for (const [key, value] of Object.entries(envVars)) {
           // Only set if not already defined (core worker env wins)
-          if (this.envVars[key as keyof typeof this.envVars] === undefined) {
+          if (this.envVars[key as keyof typeof this.envVars] !== value) {
+            console.error("Setting env var", key, value);
             (this.envVars as any)[key] = value;
           }
         }
       }
+
+      if(await this.getStatus() !== 'stopped') {
+        // wait up to 3 mins for the server to start
+        while(await this.getStatus() !== 'running') {
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        if(await this.getStatus() !== 'running') {
+          throw new Error("Server did not start in time");
+        }
+      }
       
-      return super.start();
+      return super.startAndWaitForPorts(8080, {
+          waitInterval: 250,
+          instanceGetTimeoutMS: 2000,
+          portReadyTimeoutMS: 300000
+      });
     }
 
     override onStart() {
@@ -324,6 +355,47 @@ export class MinecraftContainer extends Container<{
     }
     console.log("setupPassword: No blockConcurrencyWhile, running directly");
     return await run();
+  }
+
+  public async getLogs(): Promise<string> {
+    const response = await this.containerFetch("http://localhost:8082/logs", 8082);
+    return await response.text();
+  }
+
+  public async getFileContents(filePath: string): Promise<string> {
+    // Ensure the path starts with /
+    const normalizedPath = filePath.startsWith('/') ? filePath : '/' + filePath;
+    
+    try {
+      const response = await this.containerFetch(`http://localhost:8083${normalizedPath}`, 8083);
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error(`File not found: ${filePath}`);
+        } else if (response.status === 500) {
+          const errorText = await response.text();
+          throw new Error(`Permission error or internal error: ${errorText}`);
+        } else {
+          throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
+        }
+      }
+      
+      return await response.text();
+    } catch (error) {
+      console.error("Failed to get file contents:", error);
+      throw error;
+    }
+  }
+
+  private async getStatus(): Promise<'running' | 'stopping' | 'stopped' | 'starting'> {
+    const state = (await this.getState()).status;
+    if(state === 'stopped_with_code') {
+      return 'stopped';
+    } else if ( state === 'healthy') {
+      return 'running';
+    } else {
+      return state;
+    }
   }
 
   // Async because it's easier to consume as RPC if fn is async
@@ -475,7 +547,7 @@ export class MinecraftContainer extends Container<{
         console.log("Initializing RCON", Rcon);
         this.rcon = new Promise(async (resolve, reject) => {
           try {
-            const rcon = new Rcon(port, "minecraft");
+            const rcon = new Rcon(port, "minecraft", () => this.getStatus());
             await rcon.connect();
             console.log("RCON connected");
             this.lastRconSuccess = new Date();
@@ -700,17 +772,40 @@ export class MinecraftContainer extends Container<{
       state: 'ENABLED' | 'DISABLED_WILL_ENABLE_AFTER_RESTART' | 'ENABLED_WILL_DISABLE_AFTER_RESTART' | 'DISABLED';
       requiredEnv: Array<{ name: string; description: string }>;
       configuredEnv: Record<string, string>;
+      status: PluginStatus;
     }>> {
       const enabledPlugins = this.envVars.OPTIONAL_PLUGINS.split(" ");
       const desiredPlugins = await this.pluginFilenamesToEnable;
       const allPlugins = await this.listAllPlugins();
-      return allPlugins.map(plugin => ({
-        filename: plugin.filename,
-        displayName: plugin.displayName,
-        state: desiredPlugins.includes(plugin.filename) ? (enabledPlugins.includes(plugin.filename) ? 'ENABLED' : 'DISABLED_WILL_ENABLE_AFTER_RESTART') : (enabledPlugins.includes(plugin.filename) ? 'ENABLED_WILL_DISABLE_AFTER_RESTART' : 'DISABLED'),
-        requiredEnv: plugin.requiredEnv,
-        configuredEnv: this.getConfiguredPluginEnv(plugin.filename),
-      }));
+      
+      // Resolve all plugin statuses in parallel
+      const pluginsWithStatus = await Promise.all(
+        allPlugins.map(async (plugin) => {
+          const spec = PLUGIN_SPECS.find(s => s.filename === plugin.filename);
+          
+          // Only check status for plugins that are currently enabled in envVars
+          const isCurrentlyEnabled = enabledPlugins.includes(plugin.filename);
+          const status = (spec?.getStatus && isCurrentlyEnabled)
+            ? await spec.getStatus(this).catch(() => ({ type: "no message" as const }))
+            : { type: "no message" as const };
+          
+          const state: 'ENABLED' | 'DISABLED_WILL_ENABLE_AFTER_RESTART' | 'ENABLED_WILL_DISABLE_AFTER_RESTART' | 'DISABLED' = 
+            desiredPlugins.includes(plugin.filename) 
+              ? (enabledPlugins.includes(plugin.filename) ? 'ENABLED' : 'DISABLED_WILL_ENABLE_AFTER_RESTART') 
+              : (enabledPlugins.includes(plugin.filename) ? 'ENABLED_WILL_DISABLE_AFTER_RESTART' : 'DISABLED');
+          
+          return {
+            filename: plugin.filename,
+            displayName: plugin.displayName,
+            state,
+            requiredEnv: plugin.requiredEnv,
+            configuredEnv: this.getConfiguredPluginEnv(plugin.filename),
+            status,
+          };
+        })
+      );
+      
+      return pluginsWithStatus;
     }
 
     async broadcast(message: ArrayBuffer | string) {
