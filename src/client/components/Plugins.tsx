@@ -25,6 +25,10 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
   const [hoveredWarning, setHoveredWarning] = useState<string | null>(null);
   const [hoveredToggle, setHoveredToggle] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
+  const [envModalPlugin, setEnvModalPlugin] = useState<Plugin | null>(null);
+  const [envModalMode, setEnvModalMode] = useState<'edit' | 'enable'>('edit');
+  const [envFormData, setEnvFormData] = useState<Record<string, string>>({});
+  const [envSaving, setEnvSaving] = useState(false);
 
   const fetchPlugins = async () => {
     try {
@@ -43,6 +47,55 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
     fetchPlugins();
   }, [serverState]);
 
+  const openEnvModal = (plugin: Plugin, mode: 'edit' | 'enable') => {
+    setEnvModalPlugin(plugin);
+    setEnvModalMode(mode);
+    // Pre-fill form with current configured values
+    const initialData: Record<string, string> = {};
+    plugin.requiredEnv.forEach(env => {
+      initialData[env.name] = plugin.configuredEnv[env.name] || '';
+    });
+    setEnvFormData(initialData);
+  };
+
+  const closeEnvModal = () => {
+    setEnvModalPlugin(null);
+    setEnvFormData({});
+    setEnvSaving(false);
+  };
+
+  const saveEnvVars = async (alsoEnable: boolean = false) => {
+    if (!envModalPlugin) return;
+    
+    try {
+      setEnvSaving(true);
+      const body: any = { env: envFormData };
+      if (alsoEnable) {
+        body.enabled = true;
+      }
+      
+      const response = await fetchApi(`/api/plugins/${envModalPlugin.filename}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      
+      const result = await response.json() as { success: boolean; plugins?: Plugin[]; error?: string };
+      
+      if (result.success && result.plugins) {
+        setPlugins(result.plugins);
+        closeEnvModal();
+      } else {
+        alert(result.error || 'Failed to update plugin environment variables');
+      }
+    } catch (error) {
+      console.error('Failed to save env vars:', error);
+      alert('Failed to save environment variables');
+    } finally {
+      setEnvSaving(false);
+    }
+  };
+
   const handleToggle = async (filename: string, currentState: string) => {
     if (serverState !== 'stopped') return;
     
@@ -50,12 +103,29 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
     const isEnabled = currentState === 'ENABLED' || currentState === 'DISABLED_WILL_ENABLE_AFTER_RESTART';
     const newEnabled = !isEnabled;
     
+    // If enabling a plugin with required env, check if env vars are configured
+    if (newEnabled) {
+      const plugin = plugins.find(p => p.filename === filename);
+      if (plugin && plugin.requiredEnv.length > 0) {
+        const hasAllEnv = plugin.requiredEnv.every(
+          env => plugin.configuredEnv[env.name] && plugin.configuredEnv[env.name].trim() !== ''
+        );
+        
+        if (!hasAllEnv) {
+          // Open modal to prompt for env vars
+          openEnvModal(plugin, 'enable');
+          return;
+        }
+      }
+    }
+    
     try {
       setToggling(filename);
       await onPluginToggle(filename, newEnabled);
       await fetchPlugins();
     } catch (error) {
       console.error('Failed to toggle plugin:', error);
+      alert(error instanceof Error ? error.message : 'Failed to toggle plugin');
     } finally {
       setToggling(null);
     }
@@ -232,6 +302,42 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
                 alignItems: 'center',
                 gap: '12px',
               }}>
+                {/* Env vars icon for plugins with required env */}
+                {plugin.requiredEnv.length > 0 && (
+                  <button
+                    onClick={() => openEnvModal(plugin, 'edit')}
+                    disabled={serverState !== 'stopped'}
+                    style={{
+                      width: '24px',
+                      height: '24px',
+                      borderRadius: '50%',
+                      background: 'rgba(70, 130, 180, 0.2)',
+                      border: '1px solid rgba(70, 130, 180, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '0.875rem',
+                      cursor: serverState === 'stopped' ? 'pointer' : 'not-allowed',
+                      transition: 'all 0.2s ease',
+                      opacity: serverState === 'stopped' ? 1 : 0.5,
+                      padding: 0,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (serverState === 'stopped') {
+                        e.currentTarget.style.background = 'rgba(70, 130, 180, 0.3)';
+                        e.currentTarget.style.borderColor = 'rgba(70, 130, 180, 0.5)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(70, 130, 180, 0.2)';
+                      e.currentTarget.style.borderColor = 'rgba(70, 130, 180, 0.3)';
+                    }}
+                    title={serverState === 'stopped' ? 'Configure environment variables' : 'Stop server to configure'}
+                  >
+                    ⚙️
+                  </button>
+                )}
+
                 {/* Warning icon for transitional states (only show when server is running) */}
                 {transitional && warningTooltip && serverState === 'running' && (
                   <div
@@ -418,6 +524,224 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
           );
         })}
       </div>
+
+      {/* Environment Variables Modal */}
+      {envModalPlugin && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 10000,
+          padding: '20px',
+        }}
+        onClick={closeEnvModal}
+        >
+          <div style={{
+            background: 'rgba(26, 46, 30, 0.95)',
+            backdropFilter: 'blur(20px)',
+            border: '2px solid rgba(87, 166, 78, 0.3)',
+            borderRadius: '16px',
+            padding: '32px',
+            maxWidth: '500px',
+            width: '100%',
+            boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
+          }}
+          onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{
+              margin: '0 0 8px 0',
+              fontSize: '1.5rem',
+              fontWeight: '700',
+              color: '#fff',
+            }}>
+              {envModalMode === 'enable' ? 'Configure & Enable' : 'Environment Variables'}
+            </h3>
+            <p style={{
+              margin: '0 0 24px 0',
+              color: '#888',
+              fontSize: '0.875rem',
+            }}>
+              {envModalPlugin.displayName}
+              {envModalMode === 'enable' && ' - Please configure required environment variables to enable this plugin'}
+            </p>
+
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px',
+              marginBottom: '24px',
+            }}>
+              {envModalPlugin.requiredEnv.map((env) => (
+                <div key={env.name}>
+                  <label style={{
+                    display: 'block',
+                    color: '#fff',
+                    fontSize: '0.875rem',
+                    fontWeight: '600',
+                    marginBottom: '6px',
+                  }}>
+                    {env.name}
+                  </label>
+                  <p style={{
+                    margin: '0 0 8px 0',
+                    color: '#888',
+                    fontSize: '0.75rem',
+                  }}>
+                    {env.description}
+                  </p>
+                  <input
+                    type="text"
+                    value={envFormData[env.name] || ''}
+                    onChange={(e) => setEnvFormData({ ...envFormData, [env.name]: e.currentTarget.value })}
+                    disabled={serverState !== 'stopped' && envModalMode === 'edit'}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      background: 'rgba(255, 255, 255, 0.05)',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontSize: '0.875rem',
+                      fontFamily: 'monospace',
+                      outline: 'none',
+                      transition: 'all 0.2s ease',
+                      opacity: (serverState !== 'stopped' && envModalMode === 'edit') ? 0.5 : 1,
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = 'rgba(87, 166, 78, 0.4)';
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                    }}
+                    placeholder={`Enter ${env.name}`}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {serverState !== 'stopped' && envModalMode === 'edit' && (
+              <p style={{
+                margin: '0 0 16px 0',
+                color: '#FFB600',
+                fontSize: '0.75rem',
+                padding: '8px 12px',
+                background: 'rgba(255, 182, 0, 0.1)',
+                border: '1px solid rgba(255, 182, 0, 0.3)',
+                borderRadius: '8px',
+              }}>
+                ⚠️ Server must be stopped to change environment variables
+              </p>
+            )}
+
+            <div style={{
+              display: 'flex',
+              gap: '12px',
+              justifyContent: 'flex-end',
+            }}>
+              <button
+                onClick={closeEnvModal}
+                disabled={envSaving}
+                style={{
+                  padding: '10px 20px',
+                  background: 'rgba(120, 120, 120, 0.3)',
+                  border: '1px solid rgba(160, 160, 160, 0.4)',
+                  borderRadius: '8px',
+                  color: '#fff',
+                  fontSize: '0.875rem',
+                  fontWeight: '600',
+                  cursor: envSaving ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s ease',
+                  opacity: envSaving ? 0.5 : 1,
+                }}
+                onMouseEnter={(e) => {
+                  if (!envSaving) {
+                    e.currentTarget.style.background = 'rgba(140, 140, 140, 0.4)';
+                    e.currentTarget.style.borderColor = 'rgba(180, 180, 180, 0.5)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(120, 120, 120, 0.3)';
+                  e.currentTarget.style.borderColor = 'rgba(160, 160, 160, 0.4)';
+                }}
+              >
+                {envModalMode === 'enable' ? 'Cancel' : 'Close'}
+              </button>
+              
+              {envModalMode === 'enable' ? (
+                <button
+                  onClick={() => saveEnvVars(true)}
+                  disabled={envSaving}
+                  style={{
+                    padding: '10px 20px',
+                    background: 'linear-gradient(135deg, #57A64E 0%, #6BB854 100%)',
+                    border: '2px solid rgba(87, 166, 78, 0.5)',
+                    borderRadius: '8px',
+                    color: '#fff',
+                    fontSize: '0.875rem',
+                    fontWeight: '600',
+                    cursor: envSaving ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.2s ease',
+                    opacity: envSaving ? 0.7 : 1,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!envSaving) {
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(87, 166, 78, 0.4)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                >
+                  {envSaving ? 'Saving...' : 'Complete & Enable'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => saveEnvVars(false)}
+                  disabled={envSaving || serverState !== 'stopped'}
+                  style={{
+                    padding: '10px 20px',
+                    background: (serverState === 'stopped' && !envSaving)
+                      ? 'linear-gradient(135deg, #57A64E 0%, #6BB854 100%)'
+                      : 'rgba(120, 120, 120, 0.3)',
+                    border: (serverState === 'stopped' && !envSaving)
+                      ? '2px solid rgba(87, 166, 78, 0.5)'
+                      : '1px solid rgba(160, 160, 160, 0.4)',
+                    borderRadius: '8px',
+                    color: '#fff',
+                    fontSize: '0.875rem',
+                    fontWeight: '600',
+                    cursor: (serverState === 'stopped' && !envSaving) ? 'pointer' : 'not-allowed',
+                    transition: 'all 0.2s ease',
+                    opacity: (serverState === 'stopped' && !envSaving) ? 1 : 0.5,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (serverState === 'stopped' && !envSaving) {
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(87, 166, 78, 0.4)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                >
+                  {envSaving ? 'Saving...' : 'Save'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -141,26 +141,39 @@ const elysiaApp = (
   })
 
   /**
-   * Enable or disable a plugin. Works when container is stopped.
+   * Enable/disable a plugin or set its environment variables.
+   * Accepts: { enabled: boolean } | { env: Record<string,string> } | { enabled: boolean, env: Record<string,string> }
    */
   .post("/plugins/:filename", async ({ params, body }: any) => {
     try {
       const container = getMinecraftContainer();
       const { filename } = params;
-      const { enabled } = body as { enabled: boolean };
+      const { enabled, env } = body as { enabled?: boolean; env?: Record<string, string> };
       
-      if (enabled) {
-        await container.enablePlugin({ filename });
-      } else {
-        await container.disablePlugin({ filename });
+      // If env present, require server stopped
+      if (env !== undefined) {
+        const state = await container.getState();
+        if (state.status !== 'stopped') {
+          return { success: false, error: "Server must be stopped to change plugin environment variables" };
+        }
+        await container.setPluginEnv({ filename, env });
+      }
+      
+      // If enabled present, toggle plugin
+      if (enabled !== undefined) {
+        if (enabled) {
+          await container.enablePlugin({ filename, env });
+        } else {
+          await container.disablePlugin({ filename });
+        }
       }
       
       // Return updated plugin state
       const plugins = await container.getPluginState();
       return { success: true, plugins };
     } catch (error) {
-      console.error("Failed to toggle plugin:", error);
-      return { success: false, error: error instanceof Error ? error.message : "Failed to toggle plugin" };
+      console.error("Failed to update plugin:", error);
+      return { success: false, error: error instanceof Error ? error.message : "Failed to update plugin" };
     }
   })
   

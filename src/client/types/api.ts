@@ -41,6 +41,8 @@ export interface Plugin {
   filename: string;
   displayName: string;
   state: PluginState;
+  requiredEnv: Array<{ name: string; description: string }>;
+  configuredEnv: Record<string, string>;
 }
 
 export interface PluginsResponse {

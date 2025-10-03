@@ -6,6 +6,23 @@ import { array, string } from "zod";
 
 const StringArraySchema = array(string());
 const DYNMAP_PLUGIN_FILENAME = 'Dynmap-3.7-beta-11-spigot';
+
+// Plugin specifications with required environment variables
+const PLUGIN_SPECS = [
+  {
+    filename: 'Dynmap-3.7-beta-11-spigot',
+    displayName: 'DynMap',
+    requiredEnv: [] as Array<{ name: string; description: string }>,
+  },
+  {
+    filename: 'playit-minecraft-plugin',
+    displayName: 'playit.gg',
+    requiredEnv: [
+      { name: 'PLAYIT_SECRET', description: 'Your playit.gg secret token from the playit.gg dashboard' },
+    ],
+  },
+] as const;
+
 export class MinecraftContainer extends Container<{
   TS_AUTHKEY: string;
   R2_ACCESS_KEY_ID: string;
@@ -131,6 +148,65 @@ export class MinecraftContainer extends Container<{
       `, JSON.stringify({ optionalPlugins: this.pluginFilenamesToEnable })).rowsWritten;
       console.log(result);
     }
+
+    // Get configured environment variables for a specific plugin
+    private getConfiguredPluginEnv(filename: string): Record<string, string> {
+      try {
+        const result = this._sql.exec(
+          `SELECT json(COALESCE(jsonb_extract(json_data, '$.pluginEnv."' || ? || '"'), jsonb('{}'))) as env FROM state WHERE id = 1;`,
+          filename
+        ).one();
+        if (!result) {
+          return {};
+        }
+        return JSON.parse(result.env as string);
+      } catch (error) {
+        console.error("Failed to get configured plugin env:", error);
+        return {};
+      }
+    }
+
+    // Set configured environment variables for a specific plugin
+    private setConfiguredPluginEnv(filename: string, env: Record<string, string>): void {
+      this.ctx.storage.transactionSync(() => {
+        // Read current env for this plugin
+        const current = this.getConfiguredPluginEnv(filename);
+        // Merge with new values (filter out undefined/null)
+        const next: Record<string, string> = { ...current };
+        for (const [key, value] of Object.entries(env)) {
+          if (value !== undefined && value !== null) {
+            next[key] = value;
+          }
+        }
+        // Write merged object
+        this._sql.exec(
+          `UPDATE state SET json_data = jsonb_patch(json_data, jsonb(?)) WHERE id = 1`,
+          JSON.stringify({ pluginEnv: { [filename]: next } })
+        );
+      });
+    }
+
+    // Get all configured plugin environment variables
+    private getAllConfiguredPluginEnv(): Record<string, Record<string, string>> {
+      try {
+        const result = this._sql.exec(
+          `SELECT json(COALESCE(jsonb_extract(json_data, '$.pluginEnv'), jsonb('{}'))) as pluginEnv FROM state WHERE id = 1;`
+        ).one();
+        if (!result) {
+          return {};
+        }
+        return JSON.parse(result.pluginEnv as string);
+      } catch (error) {
+        console.error("Failed to get all configured plugin env:", error);
+        return {};
+      }
+    }
+
+    // Get required env vars for a plugin from specs
+    private getRequiredEnvForPlugin(filename: string): Array<{ name: string; description: string }> {
+      const spec = PLUGIN_SPECS.find(s => s.filename === filename);
+      return spec ? [...spec.requiredEnv] : [];
+    }
         
     // RCON connection instance
     private rcon: Promise<Rcon> | null = null;
@@ -142,6 +218,18 @@ export class MinecraftContainer extends Container<{
       if(newOptionalPlugins !== this.envVars.OPTIONAL_PLUGINS) {
         this.envVars.OPTIONAL_PLUGINS = this.pluginFilenamesToEnable.join(" ");
       }
+      
+      // Inject configured plugin environment variables (only mutate envVars here!)
+      const allPluginEnv = this.getAllConfiguredPluginEnv();
+      for (const [pluginFilename, envVars] of Object.entries(allPluginEnv)) {
+        for (const [key, value] of Object.entries(envVars)) {
+          // Only set if not already defined (core worker env wins)
+          if (this.envVars[key as keyof typeof this.envVars] === undefined) {
+            (this.envVars as any)[key] = value;
+          }
+        }
+      }
+      
       return super.start();
     }
 
@@ -563,18 +651,32 @@ export class MinecraftContainer extends Container<{
     }
 
     public async listAllPlugins() {
-      return [{
-        displayName: 'DynMap',
-        filename: DYNMAP_PLUGIN_FILENAME,
-      },
-      {
-        displayName: 'playit.gg',
-        filename: 'playit-minecraft-plugin',
-      }] as const;
+      return PLUGIN_SPECS.map(spec => ({
+        displayName: spec.displayName,
+        filename: spec.filename,
+        requiredEnv: [...spec.requiredEnv], // Clone to mutable array
+      }));
     }
 
     // Async because it's easier to consume as RPC if fn is async
-    public async enablePlugin({ filename }: { filename: string }) {
+    public async enablePlugin({ filename, env }: { filename: string; env?: Record<string, string> }) {
+      // If env provided, persist it first
+      if (env) {
+        this.setConfiguredPluginEnv(filename, env);
+      }
+      
+      // Validate that all required env vars are set
+      const requiredEnv = this.getRequiredEnvForPlugin(filename);
+      if (requiredEnv.length > 0) {
+        const configured = this.getConfiguredPluginEnv(filename);
+        const missing = requiredEnv.filter(({ name }) => !configured[name] || configured[name].trim() === '');
+        
+        if (missing.length > 0) {
+          const missingNames = missing.map(e => e.name).join(', ');
+          throw new Error(`Cannot enable plugin ${filename}: missing required environment variables: ${missingNames}`);
+        }
+      }
+      
       this.pluginFilenamesToEnable = [...this.pluginFilenamesToEnable, filename];
     }
 
@@ -586,8 +688,19 @@ export class MinecraftContainer extends Container<{
       this.pluginFilenamesToEnable = this.pluginFilenamesToEnable.filter(p => p !== filename);
     }
 
+    // Async because it's easier to consume as RPC if fn is async
+    public async setPluginEnv({ filename, env }: { filename: string; env: Record<string, string> }) {
+      this.setConfiguredPluginEnv(filename, env);
+    }
 
-    public async getPluginState(): Promise<Array<{filename: string, displayName: string, state: 'ENABLED' | 'DISABLED_WILL_ENABLE_AFTER_RESTART' | 'ENABLED_WILL_DISABLE_AFTER_RESTART' | 'DISABLED'}>> {
+
+    public async getPluginState(): Promise<Array<{
+      filename: string;
+      displayName: string;
+      state: 'ENABLED' | 'DISABLED_WILL_ENABLE_AFTER_RESTART' | 'ENABLED_WILL_DISABLE_AFTER_RESTART' | 'DISABLED';
+      requiredEnv: Array<{ name: string; description: string }>;
+      configuredEnv: Record<string, string>;
+    }>> {
       const enabledPlugins = this.envVars.OPTIONAL_PLUGINS.split(" ");
       const desiredPlugins = await this.pluginFilenamesToEnable;
       const allPlugins = await this.listAllPlugins();
@@ -595,6 +708,8 @@ export class MinecraftContainer extends Container<{
         filename: plugin.filename,
         displayName: plugin.displayName,
         state: desiredPlugins.includes(plugin.filename) ? (enabledPlugins.includes(plugin.filename) ? 'ENABLED' : 'DISABLED_WILL_ENABLE_AFTER_RESTART') : (enabledPlugins.includes(plugin.filename) ? 'ENABLED_WILL_DISABLE_AFTER_RESTART' : 'DISABLED'),
+        requiredEnv: plugin.requiredEnv,
+        configuredEnv: this.getConfiguredPluginEnv(plugin.filename),
       }));
     }
 
