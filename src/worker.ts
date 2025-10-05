@@ -195,13 +195,60 @@ const elysiaApp = (
       console.error("Container shut down");
       const state = await container.getStatus();
       console.error("Container state:", state);
-      
-      return { success: true };
+
+      // Get the updated last session info with the new stop time
+      const lastSession = await container.getLastSession();
+
+      return { success: true, lastSession };
     } catch (error) {
       console.error("Failed to shutdown container:", error);
       return { success: false, error: "Failed to shutdown container" };
     }
-  }).compile()
+  })
+
+  /**
+   * Get current session info (running or not)
+   */
+  .get("/session/current", async () => {
+    try {
+      const container = getMinecraftContainer();
+      const session = await container.getCurrentSession();
+      return session;
+    } catch (error) {
+      console.error("Failed to get current session:", error);
+      return { isRunning: false, error: "Failed to get current session" };
+    }
+  })
+
+  /**
+   * Get last completed session info
+   */
+  .get("/session/last", async () => {
+    try {
+      const container = getMinecraftContainer();
+      const session = await container.getLastSession();
+      return session || { error: "No previous sessions" };
+    } catch (error) {
+      console.error("Failed to get last session:", error);
+      return { error: "Failed to get last session" };
+    }
+  })
+
+  /**
+   * Get usage statistics (hours this month and year)
+   */
+  .get("/session/stats", async () => {
+    try {
+      const container = getMinecraftContainer();
+      const stats = await container.getUsageStats();
+      return stats;
+    } catch (error) {
+      console.error("Failed to get usage stats:", error);
+      return { thisMonth: 0, thisYear: 0, error: "Failed to get usage stats" };
+    }
+  })
+
+  .compile()
 
 const app = new Elysia({
   adapter: CloudflareAdapter,

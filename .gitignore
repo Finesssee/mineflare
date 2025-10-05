@@ -16,7 +16,7 @@ bun.lockb
 dist/
 build/
 *.tsbuildinfo
-container_src/http-proxy
+container_src/http-proxy-*
 
 # Runtime data
 pids

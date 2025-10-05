@@ -29,9 +29,11 @@ COPY start-with-services.sh /usr/local/bin/start-with-services.sh
 COPY dynmap-configuration.txt /dynmap-configuration.txt
 COPY Dynmap-3.7-beta-11-spigot.jar /data/plugins/dynmap.jar
 COPY optional_plugins/ /data/optional_plugins/
-COPY http-proxy /usr/local/bin/http-proxy
+COPY http-proxy-x64 /usr/local/bin/http-proxy-x64
+COPY http-proxy-arm64 /usr/local/bin/http-proxy-arm64
 RUN chmod +x /usr/local/bin/start-with-services.sh \
-    && chmod +x /usr/local/bin/http-proxy \
+    && chmod +x /usr/local/bin/http-proxy-x64 \
+    && chmod +x /usr/local/bin/http-proxy-arm64 \
     && mkdir -p /run/tailscale \
     && chown -R 1000:1000 /data \
     && chown -R 1000:1000 /run/tailscale

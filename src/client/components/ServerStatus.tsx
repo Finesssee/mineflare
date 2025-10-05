@@ -456,35 +456,6 @@ export function ServerStatus({ status, info, serverState }: Props) {
                   </div>
                 </div>
               )}
-              
-              {info.motd && (
-                <div style={{
-                  padding: '0',
-                }}>
-                  <div style={{
-                    color: '#888',
-                    fontSize: '0.75rem',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.08em',
-                    marginBottom: '8px',
-                    fontWeight: '600',
-                  }}>
-                    💬 Message of the Day
-                  </div>
-                  <div style={{
-                    color: '#b0b0b0',
-                    fontSize: '0.875rem',
-                    lineHeight: '1.6',
-                    fontStyle: 'italic',
-                    background: 'rgba(255, 255, 255, 0.03)',
-                    padding: '12px',
-                    borderRadius: '8px',
-                    borderLeft: '3px solid #57A64E',
-                  }}>
-                    {info.motd}
-                  </div>
-                </div>
-              )}
             </>
           )}
         </>

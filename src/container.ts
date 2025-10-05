@@ -43,6 +43,28 @@ const PLUGIN_SPECS = [
     requiredEnv: [] as Array<{ name: string; description: string }>,
     getStatus: async (container: MinecraftContainer): Promise<PluginStatus> => {
 
+      const status = await container.getStatus();
+      // we can't talk to the container if it's not running
+      if(status !== 'running') {
+        return { type: "no message" };
+      }
+      
+      // need to read in the playit.gg config file
+      let config = null;
+      try{
+        config = await container.getFileContents("/data/plugins/playit-gg/config.yml");
+      } catch (error) {
+        console.log("Failed to get playit.gg config:", error);
+      }
+      console.log("playit.gg config", config);
+      // find the line starting with agent-secret:
+      const agentSecretLine = config?.split("\n").find(line => line.startsWith("agent-secret:"));
+      // extract the following text and trim the whitespace and any single or double quotes
+      const agentSecret = agentSecretLine?.split("agent-secret:")[1].trim().replace(/['"]/g, '');
+      if(agentSecret) {
+        return { type: "information", message: "playit.gg secret is configured" };
+      }
+
       // need to check if we find any matching url https://playit.gg/mc/<code>" using regex
       const logs = await container.getLogs();
       const regex = /https:\/\/playit\.gg\/mc\/([a-f0-9]+)/gi;
@@ -53,7 +75,7 @@ const PLUGIN_SPECS = [
         const code = lastMatch[1];
         return { type: "warning", message: "not connected go to https://playit.gg/mc/" + code + " to connect" };
       } else {
-        return { type: "information", message: "playit.gg is active" };
+        return { type: "warning", message: "playit.gg is in an unknown state" };
       }
     },
   },
@@ -114,6 +136,12 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
             password_hash TEXT,
             sym_key TEXT,
             created_at INTEGER
+          );
+          CREATE TABLE IF NOT EXISTS container_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at INTEGER NOT NULL,
+            stopped_at INTEGER,
+            duration_ms INTEGER
           );
         `);
       }
@@ -266,13 +294,14 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
     override async stop() {
       console.error("stopppppp");
       this.stopping = true;
+      this.recordSessionStop();
       await super.stop("SIGTERM");
     }
 
     // Optional lifecycle hooks
     override async start() {
       this.stopping = false
-      console.error("start");
+      console.error("Container start triggered");
       this._initializeSql();
       const newOptionalPlugins = this.pluginFilenamesToEnable.join(" ");
       if(newOptionalPlugins !== this.envVars.OPTIONAL_PLUGINS) {
@@ -336,6 +365,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
 
     override onStart() {
       console.error("Container successfully started");
+      this.recordSessionStart();
       this.ctx.waitUntil(this.initRcon().then(rcon => rcon?.send("dynmap fullrender world")));
     }
   
@@ -459,7 +489,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
 
   public async getStatus(): Promise<'running' | 'stopping' | 'stopped' | 'starting'> {
     const state = await this.getState();
-    console.error("getState", state);
+    console.error("getState: " + JSON.stringify(state));
     const status = state.status;
     if(status === 'stopped_with_code') {
       this.stopping = false;
@@ -521,6 +551,134 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
       this._isPasswordSet = false;
     });
     console.error("clearAuth: Complete, isPasswordSet =", this._isPasswordSet);
+  }
+
+  // =====================
+  // Session tracking methods
+  // =====================
+
+  private recordSessionStart(): void {
+    try {
+      // Close any open sessions first (in case of unexpected restart)
+      this._sql.exec(`
+        UPDATE container_sessions
+        SET stopped_at = ?, duration_ms = ? - started_at
+        WHERE stopped_at IS NULL
+      `, Date.now(), Date.now());
+
+      // Create new session
+      this._sql.exec('INSERT INTO container_sessions (started_at) VALUES (?)', Date.now());
+      console.error("Session start recorded");
+    } catch (error) {
+      console.error("Failed to record session start:", error);
+    }
+  }
+
+  private recordSessionStop(): void {
+    try {
+      const now = Date.now();
+      this._sql.exec(`
+        UPDATE container_sessions
+        SET stopped_at = ?, duration_ms = ? - started_at
+        WHERE stopped_at IS NULL
+      `, now, now);
+      console.error("Session stop recorded");
+    } catch (error) {
+      console.error("Failed to record session stop:", error);
+    }
+  }
+
+  public async getCurrentSession(): Promise<{ isRunning: boolean; startedAt?: number } | null> {
+    try {
+      const rows = this._sql.exec(`
+        SELECT started_at FROM container_sessions
+        WHERE stopped_at IS NULL
+        ORDER BY id DESC
+        LIMIT 1
+      `).toArray();
+
+      if (rows.length > 0) {
+        const row = rows[0];
+        return {
+          isRunning: true,
+          startedAt: row.started_at as number
+        };
+      }
+      return { isRunning: false };
+    } catch (error) {
+      console.error("Failed to get current session:", error);
+      return null;
+    }
+  }
+
+  public async getLastSession(): Promise<{ stoppedAt?: number; durationMs?: number } | null> {
+    try {
+      const rows = this._sql.exec(`
+        SELECT stopped_at, duration_ms FROM container_sessions
+        WHERE stopped_at IS NOT NULL
+        ORDER BY stopped_at DESC
+        LIMIT 1
+      `).toArray();
+
+      if (rows.length > 0) {
+        const row = rows[0];
+        return {
+          stoppedAt: row.stopped_at as number,
+          durationMs: row.duration_ms as number
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error("Failed to get last session:", error);
+      return null;
+    }
+  }
+
+  public async getUsageStats(): Promise<{ thisMonth: number; thisYear: number }> {
+    try {
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+      const yearStart = new Date(now.getFullYear(), 0, 1).getTime();
+
+      // Get completed sessions + current session duration
+      const monthRows = this._sql.exec(`
+        SELECT
+          COALESCE(SUM(duration_ms), 0) as completed,
+          (SELECT started_at FROM container_sessions WHERE stopped_at IS NULL LIMIT 1) as current_start
+        FROM container_sessions
+        WHERE stopped_at >= ? AND stopped_at IS NOT NULL
+      `, monthStart).toArray();
+
+      const yearRows = this._sql.exec(`
+        SELECT
+          COALESCE(SUM(duration_ms), 0) as completed,
+          (SELECT started_at FROM container_sessions WHERE stopped_at IS NULL LIMIT 1) as current_start
+        FROM container_sessions
+        WHERE stopped_at >= ? AND stopped_at IS NOT NULL
+      `, yearStart).toArray();
+
+      const monthResult = monthRows.length > 0 ? monthRows[0] : { completed: 0, current_start: null };
+      const yearResult = yearRows.length > 0 ? yearRows[0] : { completed: 0, current_start: null };
+
+      let monthMs = (monthResult?.completed as number) || 0;
+      let yearMs = (yearResult?.completed as number) || 0;
+
+      // Add current session time if running
+      const currentStart = monthResult?.current_start as number | null;
+      if (currentStart) {
+        const currentDuration = Date.now() - currentStart;
+        if (currentStart >= monthStart) monthMs += currentDuration;
+        if (currentStart >= yearStart) yearMs += currentDuration;
+      }
+
+      return {
+        thisMonth: monthMs / (1000 * 60 * 60), // Convert to hours
+        thisYear: yearMs / (1000 * 60 * 60)
+      };
+    } catch (error) {
+      console.error("Failed to get usage stats:", error);
+      return { thisMonth: 0, thisYear: 0 };
+    }
   }
 
     override onStop() {
@@ -922,7 +1080,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
 
     async fetchFromR2(request: Request): Promise<Response> {
       const url = new URL(request.url);
-      
+    
       // Strip bucket name from path if using path-style URLs
       // Path-style: /bucket-name/path/to/object
       // Virtual-hosted: /path/to/object (bucket name in hostname)
@@ -1150,18 +1308,9 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
           const exists = await this.env.R2_BUCKET.head(pathWithoutLeadingSlash);
           if (!exists) {
             // AWS S3 is idempotent - returns 204 even if object doesn't exist
-            // But we can be more explicit with a 404 error
-            return new Response(`<?xml version="1.0" encoding="UTF-8"?>
-<Error>
-    <Code>NoSuchKey</Code>
-    <Message>The specified key does not exist.</Message>
-    <Key>${pathWithoutLeadingSlash}</Key>
-    <RequestId>${this.ctx.id.toString()}</RequestId>
-    <HostId>${this.ctx.id.toString()}</HostId>
-</Error>`, { 
-              status: 404,
+            return new Response(null, { 
+              status: 204,
               headers: {
-                "Content-Type": "application/xml",
                 "x-amz-request-id": this.ctx.id.toString(),
               }
             });
@@ -1289,7 +1438,8 @@ type ControlMessage =
   | { type: "allocate_channel"; requestId: string; port: number }
   | { type: "channel_allocated"; requestId: string; port: number }
   | { type: "channel_released"; port: number }
-  | { type: "error"; requestId: string; message: string };
+  | { type: "error"; requestId: string; message: string }
+  | { type: "heartbeat"; ts?: number };
 
 interface DataChannelState {
   port: number;
@@ -1313,6 +1463,8 @@ class HTTPProxyControl {
   private disconnectPromise: Promise<void> | null = null;
   private disconnectResolve: (() => void) | null = null;
   private disconnectReject: ((error: Error) => void) | null = null;
+  private lastHeartbeatAt: number = 0;
+  private heartbeatWatchdogInterval: Promise<void> | null = null;
   
   private CONTROL_PORT = 8084;
   private DATA_PORT_START = 8085;
@@ -1390,26 +1542,57 @@ class HTTPProxyControl {
 
     console.error("Connecting to control channel on port", this.CONTROL_PORT);
     
-    try {
-      this.controlSocket = port.connect(`localhost:${this.CONTROL_PORT}`);
-      await this.controlSocket.opened;
-      this.isConnected = true;
-      
-      this.controlWriter = this.controlSocket.writable.getWriter();
-      this.controlReader = this.controlSocket.readable.getReader();
-      
-      // Start reading control messages
-      this.waitUntil(this.readControlMessages(), "readControlMessages");
-      
-      console.error("Control channel connected");
-    } catch (error) {
-      console.error("Failed to connect control channel:", error);
-      // Clean up on failure
-      this.controlReader = null;
-      this.controlWriter = null;
-      this.controlSocket = null;
-      throw error;
+    // Retry connection with exponential backoff (deployed containers start slower)
+    let lastError: Error | null = null;
+    const maxRetries = 10;
+    const retryDelays = [500, 1000, 2000, 3000, 5000, 5000, 5000, 5000, 5000, 5000]; // ms
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          console.error(`Control channel connection attempt ${attempt + 1}/${maxRetries} after ${retryDelays[attempt - 1]}ms delay`);
+          await new Promise(resolve => setTimeout(resolve, retryDelays[attempt - 1]));
+        }
+        
+        this.controlSocket = port.connect(`localhost:${this.CONTROL_PORT}`);
+        const socketInfo = await this.controlSocket.opened;
+        this.ctx.waitUntil(this.controlSocket.closed.then(async () => {
+          const status = await this.stateProvider();
+          console.error("Control channel socket closed " + JSON.stringify(status));
+        }));
+        console.error("Control channel socket opened", socketInfo);
+        this.isConnected = true;
+        
+        this.controlWriter = this.controlSocket.writable.getWriter();
+        this.controlReader = this.controlSocket.readable.getReader();
+        
+        // Start reading control messages
+        this.waitUntil(this.readControlMessages(), "readControlMessages");
+        // Start heartbeat watchdog
+        this.waitUntil(this.startHeartbeatWatchdog(), "startHeartbeatWatchdog");
+        
+        console.error("Control channel connected successfully");
+        return; // Success!
+      } catch (error) {
+        lastError = error as Error;
+        console.error(`Control channel connection attempt ${attempt + 1}/${maxRetries} failed:`, error);
+        // Clean up on failure
+        this.controlReader = null;
+        this.controlWriter = null;
+        this.controlSocket = null;
+        
+        // Check if we should continue retrying
+        const status = await this.stateProvider();
+        if (status === 'stopping' || status === 'stopped') {
+          console.error("Container stopped, aborting control channel connection");
+          throw new Error("Container stopped during connection");
+        }
+      }
     }
+    
+    // All retries exhausted
+    console.error("Failed to connect control channel after", maxRetries, "attempts");
+    throw lastError || new Error("Failed to connect control channel");
   }
 
   private async connectDataChannels() {
@@ -1517,6 +1700,10 @@ class HTTPProxyControl {
         
       case "channel_released":
         await this.releaseChannel(message.port);
+        break;
+      case "heartbeat":
+        // Update heartbeat timestamp
+        this.lastHeartbeatAt = Date.now();
         break;
       default:
         console.error("Unknown control message type:", message.type);
@@ -1945,6 +2132,7 @@ class HTTPProxyControl {
 
   private handleDisconnect() {
     this.isConnected = false;
+    this.stopHeartbeatWatchdog();
     
     // Signal disconnection to the infinite retry loop
     if (this.disconnectResolve) {
@@ -1956,6 +2144,7 @@ class HTTPProxyControl {
 
   async disconnect() {
     console.error("Disconnecting HTTP Proxy");
+    this.stopHeartbeatWatchdog();
     // Close all data channels
     for (const channel of this.dataChannels.values()) {
       await this.closeDataChannel(channel);
@@ -1991,5 +2180,75 @@ class HTTPProxyControl {
       this.disconnectReject = null;
     }
     this.disconnectPromise = null;
+  }
+
+  private async startHeartbeatWatchdog() {
+    if (this.heartbeatWatchdogInterval !== null) {
+      console.error("Control heartbeat watchdog already running, stopping");
+      return;
+    };
+    this.heartbeatWatchdogInterval = new Promise<void>(async (resolve) => {
+      let lastNow = Date.now();
+      try{
+        while(true) {
+          const status = await this.stateProvider();
+          if(status !== 'running') {
+            console.error("Container not running, stopping control heartbeat watchdog");
+            return;
+          }
+          // Initialize to now to allow initial heartbeat delay
+          this.lastHeartbeatAt = Date.now();
+          console.error("Running control heartbeat watchdog (5s timeout)");
+          try {
+            const now = Date.now();
+            console.error(`Heartbeat watchdog check ${now - lastNow}ms ${now}, ${lastNow}, ${this.lastHeartbeatAt}`);
+            const elapsed = now - this.lastHeartbeatAt;
+            lastNow = now;
+            if (elapsed > 20000) {
+              console.error("No control heartbeat for", elapsed, "ms; closing control channel to trigger reconnect");
+              // Force close only the control channel; reconnect loop will re-establish
+              await this.forceCloseControlChannel();
+            }
+          } catch (e) {
+            console.error("Heartbeat watchdog error:", e);
+          }
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+      } finally {
+        this.heartbeatWatchdogInterval = null;
+        resolve();
+      }
+    });
+
+  }
+
+  private stopHeartbeatWatchdog() {
+    if (this.heartbeatWatchdogInterval !== null) {
+      clearInterval(this.heartbeatWatchdogInterval as unknown as number);
+      this.heartbeatWatchdogInterval = null;
+      console.error("Stopped control heartbeat watchdog");
+    }
+  }
+
+  private async forceCloseControlChannel() {
+    try {
+      if (this.controlReader) {
+        await this.controlReader.cancel();
+        this.controlReader.releaseLock();
+        this.controlReader = null;
+      }
+      if (this.controlWriter) {
+        await this.controlWriter.close();
+        this.controlWriter = null;
+      }
+      if (this.controlSocket) {
+        await this.controlSocket.close();
+        this.controlSocket = null;
+      }
+    } catch (e) {
+      console.error("Error while force-closing control channel:", e);
+    } finally {
+      this.handleDisconnect();
+    }
   }
 }

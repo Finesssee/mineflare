@@ -6,6 +6,7 @@ import { Minimap } from './components/Minimap';
 import { Plugins } from './components/Plugins';
 import { Login } from './components/Login';
 import { useAuth } from './hooks/useAuth';
+import { SessionTimer } from './components/SessionTimer';
 
 try {
   if (process.env.NODE_ENV === 'development') {
@@ -17,6 +18,9 @@ try {
 
 export function App() {
   const auth = useAuth();
+  
+  // Check for debug mode
+  const isDebugMode = new URLSearchParams(window.location.search).get('debug') === 'true';
   
   // Only start polling server data when authenticated
   const { status, players, info, plugins, loading, error, serverState, startServer, stopServer, refresh, togglePlugin } = useServerData(auth.authenticated);
@@ -145,7 +149,38 @@ export function App() {
         )}
 
         {/* Start/Stop Button */}
-        {serverState === 'stopped' ? (
+        {!serverState ? (
+          <div style={{
+            marginTop: '40px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '16px',
+          }}>
+            <div style={{
+              fontSize: 'clamp(1.125rem, 2.5vw, 1.5rem)',
+              fontWeight: '700',
+              padding: 'clamp(16px, 3vw, 24px) clamp(48px, 8vw, 80px)',
+              background: 'rgba(87, 166, 78, 0.15)',
+              color: '#57A64E',
+              border: '2px solid rgba(87, 166, 78, 0.3)',
+              borderRadius: '12px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              animation: 'pulse 2s ease-in-out infinite',
+            }}>
+              ⏳ Initializing...
+            </div>
+            <p style={{
+              fontSize: '0.9rem',
+              color: '#888',
+              margin: '0',
+              textAlign: 'center',
+            }}>
+              Loading server state
+            </p>
+          </div>
+        ) : serverState === 'stopped' ? (
           <div style={{
             marginTop: '40px',
             display: 'flex',
@@ -257,7 +292,10 @@ export function App() {
               Shutting down gracefully
             </p>
           </div>
-        ) : (
+        ) : null}
+        
+        {/* Stop button - show when running or in debug mode */}
+        {(serverState === 'running' || isDebugMode) && (
           <div style={{
             position: 'absolute',
             top: '20px',
@@ -266,30 +304,30 @@ export function App() {
           }}>
             <button
               onClick={stopServer}
-              disabled={loading}
+              disabled={isDebugMode ? false : loading}
               style={{
                 fontSize: '0.875rem',
                 fontWeight: '600',
                 padding: '8px 20px',
-                background: loading ? 'rgba(255, 107, 107, 0.1)' : 'rgba(255, 107, 107, 0.15)',
+                background: (isDebugMode || !loading) ? 'rgba(255, 107, 107, 0.15)' : 'rgba(255, 107, 107, 0.1)',
                 color: '#ff6b6b',
                 border: '1px solid rgba(255, 107, 107, 0.3)',
                 borderRadius: '8px',
-                cursor: loading ? 'default' : 'pointer',
+                cursor: (isDebugMode || !loading) ? 'pointer' : 'default',
                 transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                 textTransform: 'uppercase',
                 letterSpacing: '0.05em',
-                opacity: loading ? 0.6 : 1,
+                opacity: (isDebugMode || !loading) ? 1 : 0.6,
               }}
               onMouseEnter={(e) => {
-                if (!loading) {
+                if (isDebugMode || !loading) {
                   e.currentTarget.style.background = 'rgba(255, 107, 107, 0.25)';
                   e.currentTarget.style.borderColor = 'rgba(255, 107, 107, 0.5)';
                   e.currentTarget.style.transform = 'scale(1.05)';
                 }
               }}
               onMouseLeave={(e) => {
-                if (!loading) {
+                if (isDebugMode || !loading) {
                   e.currentTarget.style.background = 'rgba(255, 107, 107, 0.15)';
                   e.currentTarget.style.borderColor = 'rgba(255, 107, 107, 0.3)';
                   e.currentTarget.style.transform = 'scale(1)';
@@ -412,10 +450,10 @@ export function App() {
         margin: '0 auto',
         padding: '0 20px 60px',
       }}>
-        {/* First Row: Server Status and Plugins */}
+        {/* First Row: Server Status and Server Plugins (50/50) */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+          gridTemplateColumns: 'repeat(2, 1fr)',
           gap: '24px',
           marginBottom: '24px',
         }}>
@@ -423,10 +461,14 @@ export function App() {
           <Plugins serverState={serverState} onPluginToggle={togglePlugin} />
         </div>
 
-        {/* Second Row: Player List (full width) */}
+        {/* Second Row: Session Timer and Players Online (50/50) */}
         <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, 1fr)',
+          gap: '24px',
           marginBottom: '24px',
         }}>
+          <SessionTimer serverState={serverState} />
           <PlayerList players={players} />
         </div>
 

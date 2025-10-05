@@ -21,7 +21,8 @@ type ControlMessage =
   | { type: "allocate_channel"; requestId: string; port: number }
   | { type: "channel_allocated"; requestId: string; port: number }
   | { type: "channel_released"; port: number }
-  | { type: "error"; requestId: string; message: string };
+  | { type: "error"; requestId: string; message: string }
+  | { type: "heartbeat"; ts?: number };
 
 // Data channel state
 interface DataChannelState {
@@ -41,6 +42,7 @@ class HTTPProxyServer {
   private pendingAllocations: Map<string, (port: number) => void> = new Map();
   private requestIdCounter = 0;
   private statusLoggerInterval: Timer | null = null;
+  private heartbeatInterval: Timer | null = null;
   
   // Metrics
   private successfulRequests = 0;
@@ -102,6 +104,8 @@ class HTTPProxyServer {
         open: (socket) => {
           console.log("[Control] Container.ts connected to control channel");
           this.controlSocket = socket;
+          // Start periodic heartbeats to container.ts
+          this.startHeartbeat();
         },
         
         data: (socket, data) => {
@@ -114,6 +118,7 @@ class HTTPProxyServer {
         close: (socket) => {
           console.log("[Control] Control channel closed, waiting for reconnection...");
           this.controlSocket = null;
+          this.stopHeartbeat();
         },
         
         error: (socket, error) => {
@@ -123,6 +128,26 @@ class HTTPProxyServer {
     });
     
     console.log(`[Control] Control channel listening on port ${CONTROL_PORT}`);
+  }
+
+  private startHeartbeat() {
+    if (this.heartbeatInterval) return;
+    console.log("[Control] Starting heartbeat interval (10s)");
+    this.heartbeatInterval = setInterval(() => {
+      try {
+        this.sendControlMessage({ type: "heartbeat", ts: Date.now() });
+      } catch (e) {
+        console.error("[Control] Failed to send heartbeat:", e);
+      }
+    }, 10000);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+      console.log("[Control] Stopped heartbeat interval");
+    }
   }
 
   private defaultDataChannelHandler = (data: Buffer<ArrayBufferLike>) => {

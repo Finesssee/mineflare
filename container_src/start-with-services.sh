@@ -137,16 +137,72 @@ EOF
 start_http_proxy() {
   echo "Starting HTTP proxy server..."
   
-  if ! command -v /usr/local/bin/http-proxy >/dev/null 2>&1; then
-    echo "Warning: HTTP proxy binary not found, skipping..."
+  # Detect architecture
+  ARCH=$(uname -m)
+  echo "Detected architecture: $ARCH"
+  
+  # Determine the order to try binaries based on architecture
+  if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
+    # x86_64 system - try x64 first, then arm64
+    BINARIES=("/usr/local/bin/http-proxy-x64" "/usr/local/bin/http-proxy-arm64")
+    NAMES=("x64" "arm64")
+  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+    # ARM64 system - try arm64 first, then x64
+    BINARIES=("/usr/local/bin/http-proxy-arm64" "/usr/local/bin/http-proxy-x64")
+    NAMES=("arm64" "x64")
+  else
+    # Unknown architecture - try both starting with x64
+    echo "Warning: Unknown architecture $ARCH"
+    BINARIES=("/usr/local/bin/http-proxy-x64" "/usr/local/bin/http-proxy-arm64")
+    NAMES=("x64" "arm64")
+  fi
+  
+  PROXY_BINARY=""
+  
+  # Try each binary in order
+  for i in 0 1; do
+    BINARY="${BINARIES[$i]}"
+    NAME="${NAMES[$i]}"
+    
+    if [ ! -x "$BINARY" ]; then
+      echo "Binary $NAME not found or not executable"
+      continue
+    fi
+    
+    echo "Testing $NAME binary..."
+    
+    # Try to execute and check for errors
+    # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
+    if timeout 2 "$BINARY" --help >/dev/null 2>&1; then
+      echo "✓ $NAME binary is compatible"
+      PROXY_BINARY="$BINARY"
+      break
+    else
+      EXIT_CODE=$?
+      if [ $EXIT_CODE -eq 126 ] || [ $EXIT_CODE -eq 133 ]; then
+        echo "✗ $NAME binary: Architecture mismatch (exit code $EXIT_CODE)"
+      elif [ $EXIT_CODE -eq 124 ]; then
+        echo "✓ $NAME binary timed out but seems to work (this is OK)"
+        PROXY_BINARY="$BINARY"
+        break
+      else
+        echo "✗ $NAME binary failed with exit code $EXIT_CODE"
+      fi
+    fi
+  done
+  
+  if [ -z "$PROXY_BINARY" ]; then
+    echo "Warning: No compatible HTTP proxy binary found, skipping..."
     return
   fi
+  
+  echo "Using proxy binary: $PROXY_BINARY"
   
   # Run the HTTP proxy server in background
   (
     while true; do
       echo "Starting HTTP proxy (attempt at $(date))"
-      /usr/local/bin/http-proxy || echo "HTTP proxy crashed, restarting in 2 seconds..."
+      $PROXY_BINARY || echo "HTTP proxy crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) &
