@@ -71,13 +71,12 @@ class Rcon {
     this._isConnected = false;
   }
 
-  async connect(): Promise<void> {
+  async connect(maxAttempts: number): Promise<void> {
     if (this._isConnected) {
       console.log("RCON already connected");
       return;
     }
 
-    const maxAttempts = 10;
     let lastError: Error | undefined;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {

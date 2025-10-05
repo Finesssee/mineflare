@@ -23,7 +23,7 @@ export function App() {
   const isDebugMode = new URLSearchParams(window.location.search).get('debug') === 'true';
   
   // Only start polling server data when authenticated
-  const { status, players, info, plugins, loading, error, serverState, startServer, stopServer, refresh, togglePlugin } = useServerData(auth.authenticated);
+  const { status, players, info, plugins, loading, error, serverState, startupStep, startServer, stopServer, refresh, togglePlugin } = useServerData(auth.authenticated);
 
   // Show login overlay if not authenticated
   if (!auth.authenticated) {
@@ -289,7 +289,7 @@ export function App() {
               margin: '0',
               textAlign: 'center',
             }}>
-              Shutting down gracefully
+              Storing your world data & plugin configurations safely
             </p>
           </div>
         ) : null}
@@ -468,8 +468,8 @@ export function App() {
         {/* Grid container for aligned columns */}
         <div className="responsive-grid">
           {/* First Row: Server Status and Server Plugins (50/50) */}
-          <ServerStatus status={status} info={info} serverState={serverState} />
-          <Plugins serverState={serverState} onPluginToggle={togglePlugin} />
+          <ServerStatus status={status} info={info} serverState={serverState} startupStep={startupStep} />
+          <Plugins plugins={plugins} serverState={serverState} onPluginToggle={togglePlugin} />
           
           {/* Second Row: Session Timer and Players Online (50/50) */}
           <SessionTimer serverState={serverState} />

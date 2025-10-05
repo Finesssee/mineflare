@@ -10,7 +10,8 @@ ENV TYPE=PAPER
 ENV VERSION=1.21.7
 
 # HTTP Proxy configuration - directs all HTTP/HTTPS traffic through the proxy
-ENV AWS_ENDPOINT_URL=http://localhost:3128
+# AWS_ENDPOINT_URL is set dynamically via container envVars in container.ts
+# Defaults to worker URL (/r2 endpoint) or falls back to localhost:3128 if no worker URL available
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -31,9 +32,13 @@ COPY Dynmap-3.7-beta-11-spigot.jar /data/plugins/dynmap.jar
 COPY optional_plugins/ /data/optional_plugins/
 COPY http-proxy-x64 /usr/local/bin/http-proxy-x64
 COPY http-proxy-arm64 /usr/local/bin/http-proxy-arm64
+COPY file-server-x64 /usr/local/bin/file-server-x64
+COPY file-server-arm64 /usr/local/bin/file-server-arm64
 RUN chmod +x /usr/local/bin/start-with-services.sh \
     && chmod +x /usr/local/bin/http-proxy-x64 \
     && chmod +x /usr/local/bin/http-proxy-arm64 \
+    && chmod +x /usr/local/bin/file-server-x64 \
+    && chmod +x /usr/local/bin/file-server-arm64 \
     && mkdir -p /run/tailscale \
     && chown -R 1000:1000 /data \
     && chown -R 1000:1000 /run/tailscale

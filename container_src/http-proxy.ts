@@ -234,7 +234,7 @@ class HTTPProxyServer {
     
     const self = this;
     const server = Bun.serve({
-      idleTimeout: 240,
+      idleTimeout: 255, // Maximum allowed by Bun (4.25 minutes)
       hostname: "0.0.0.0",
       port: HTTP_PORT,
       
@@ -249,6 +249,16 @@ class HTTPProxyServer {
   private async handleHTTPRequest(req: Request): Promise<Response> {
     const requestId = `req_${this.requestIdCounter++}_${Date.now()}`;
     console.log(`[HTTP] ${requestId} ${req.method} ${req.url}`);
+    
+    // Healthcheck endpoint
+    const url = new URL(req.url);
+    if (url.pathname === '/healthcheck' || url.pathname === '/health') {
+      const status = this.controlSocket ? "CONNECTED" : "DISCONNECTED";
+      return new Response(status, {
+        status: 200,
+        headers: { "Content-Type": "text/plain" }
+      });
+    }
     
     try {
       // Request a data channel allocation
@@ -268,21 +278,18 @@ class HTTPProxyServer {
         }
       }
       
-      let sendPromise: Promise<void> | null = null;
+      // Start reading response immediately (sets up handlers)
       const receivePromise = new Promise<Response>((resolve, reject) => {
-        // Read the HTTP response from the data channel
         this.readHTTPResponseFromDataChannel(channel, resolve, reject);
-
-        // Send the HTTP request over the data channel
-        sendPromise = this.sendHTTPRequestOverDataChannel(channel, req);
       });
       
-      // Wait for both promises to resolve
-      const response = await receivePromise;
-      if(!sendPromise) {
-        throw new Error("Send promise not set");
-      }
-      await sendPromise;
+      // Start sending request (including body streaming)
+      const sendPromise = this.sendHTTPRequestOverDataChannel(channel, req);
+      
+      // Wait for BOTH to complete - send and receive happen in parallel
+      // This is critical for large uploads where the server may start responding
+      // before the full body is sent, or may only respond after receiving everything
+      const [response] = await Promise.all([receivePromise, sendPromise]);
       
       // Track successful request
       this.successfulRequests++;
@@ -382,9 +389,11 @@ class HTTPProxyServer {
     
     // Handle body and Content-Length
     let bodyBytes: Uint8Array | null = null;
+    let hasContentLength = false;
+    let hasChunkedEncoding = false;
     if (req.body) {
-      const hasContentLength = headers.has("content-length");
-      const hasChunkedEncoding = headers.get("transfer-encoding")?.toLowerCase().includes("chunked");
+      hasContentLength = headers.has("content-length");
+      hasChunkedEncoding = headers.get("transfer-encoding")?.toLowerCase().includes("chunked") ?? false;
       
       // If no content-length and not chunked, buffer the body to calculate length
       if (!hasContentLength && !hasChunkedEncoding) {
@@ -451,12 +460,32 @@ class HTTPProxyServer {
         }
         channel.currentSocket.flush();
       } else if (req.body) {
-        // Stream body (has content-length or chunked encoding already)
+        // Stream body. If the incoming request used chunked transfer encoding,
+        // we must re-encode chunks on the wire. Otherwise, send raw bytes.
         const reader = req.body.getReader();
+        let totalSent = 0;
+        let chunkCount = 0;
         try {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
+            chunkCount++;
+
+            if (hasChunkedEncoding) {
+              // Write chunk size in hex followed by CRLF
+              const sizeLine = new TextEncoder().encode(value.length.toString(16) + "\r\n");
+              let written = 0;
+              while (written < sizeLine.length) {
+                const n = channel.currentSocket.write(sizeLine.slice(written));
+                if (n < 0) {
+                  console.error("[Data] Failed to send chunk size, socket is blocked");
+                  throw new Error("Socket is blocked");
+                }
+                written += n;
+              }
+            }
+
+            // Write chunk/body bytes
             let sentBytes = 0;
             while (sentBytes < value.length) {
               const bytesWritten = channel.currentSocket.write(value.slice(sentBytes));
@@ -465,9 +494,44 @@ class HTTPProxyServer {
                 throw new Error("Socket is blocked");
               }
               sentBytes += bytesWritten;
+              totalSent += bytesWritten;
+            }
+
+            if (hasChunkedEncoding) {
+              // Write CRLF after the chunk data
+              const crlf = new TextEncoder().encode("\r\n");
+              let written = 0;
+              while (written < crlf.length) {
+                const n = channel.currentSocket.write(crlf.slice(written));
+                if (n < 0) {
+                  console.error("[Data] Failed to send chunk CRLF, socket is blocked");
+                  throw new Error("Socket is blocked");
+                }
+                written += n;
+              }
+            }
+
+            // Flush after each chunk to ensure it's sent
+            channel.currentSocket.flush();
+          }
+
+          if (hasChunkedEncoding) {
+            // Send terminating zero-length chunk
+            const endChunk = new TextEncoder().encode("0\r\n\r\n");
+            let written = 0;
+            while (written < endChunk.length) {
+              const n = channel.currentSocket.write(endChunk.slice(written));
+              if (n < 0) {
+                console.error("[Data] Failed to send final chunk, socket is blocked");
+                throw new Error("Socket is blocked");
+              }
+              written += n;
             }
           }
+
+          // Final flush to ensure everything is sent
           channel.currentSocket.flush();
+          console.log(`[Data] Streamed request body: ${totalSent} bytes in ${chunkCount} chunks${hasChunkedEncoding ? " (chunked)" : ""}`);
         } finally {
           reader.releaseLock();
         }
@@ -504,12 +568,13 @@ class HTTPProxyServer {
       };
 
       // Timeout if no response received
+      // Use 10 minutes for multipart uploads which can take a long time
       const timeout = setTimeout(() => {
         if (!responseComplete) {
           cleanup();
-          reject(new Error("Response timeout"));
+          reject(new Error("Response timeout after 10 minutes"));
         }
-      }, 30000);
+      }, 600000); // 10 minutes
 
       // Handle connection close
       const closeHandler = () => {
@@ -810,15 +875,14 @@ class HTTPProxyServer {
       buffer.set(jsonBytes, 4);
       
       let sentBytes = 0;
-      while (sentBytes < buffer.length) {
+      const bufferLength = buffer.length;
+      while (sentBytes < bufferLength) {
         const bytesWritten = this.controlSocket.write(sentBytes === 0 ? buffer : buffer.slice(sentBytes));
         if(bytesWritten < 0) {
           console.error("[Control] Failed to send message, socket is blocked");
           throw new Error("Socket is blocked");
         }
-        if(sentBytes < buffer.length) {
-          console.error("[Control] Partial write of message, only wrote", bytesWritten, typeof bytesWritten, "of", buffer.length, typeof buffer.length);
-        }
+        
         sentBytes += bytesWritten;
       }
       this.controlSocket.flush();

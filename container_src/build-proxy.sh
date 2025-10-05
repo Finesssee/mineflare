@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "Building HTTP proxy server for multiple architectures..."
+echo "Building container services for multiple architectures..."
 
 cd "$(dirname "$0")"
 
@@ -11,7 +11,11 @@ if ! command -v bun &> /dev/null; then
     exit 1
 fi
 
-# Build for amd64 (x86_64) - most common in cloud environments
+echo ""
+echo "=== Building HTTP Proxy ==="
+echo ""
+
+# Build http-proxy for amd64 (x86_64)
 echo "Compiling http-proxy.ts for linux-x64..."
 bun build --compile ./http-proxy.ts --target=bun-linux-x64 --outfile=http-proxy-x64
 
@@ -23,7 +27,7 @@ else
     exit 1
 fi
 
-# Build for arm64 - for ARM-based systems
+# Build http-proxy for arm64
 echo "Compiling http-proxy.ts for linux-arm64..."
 bun build --compile ./http-proxy.ts --target=bun-linux-arm64 --outfile=http-proxy-arm64
 
@@ -36,7 +40,34 @@ else
 fi
 
 echo ""
-echo "Both binaries built successfully!"
-echo "To rebuild the Docker image with the new binaries:"
-echo "  docker build -t your-image-name ."
+echo "=== Building File Server ==="
+echo ""
 
+# Build file-server for amd64 (x86_64)
+echo "Compiling file-server.ts for linux-x64..."
+bun build --compile ./file-server.ts --target=bun-linux-x64 --outfile=file-server-x64
+
+if [ -f "./file-server-x64" ]; then
+    echo "✓ Build successful! Binary created: ./file-server-x64"
+    ls -lh ./file-server-x64
+else
+    echo "✗ x64 build failed!"
+    exit 1
+fi
+
+# Build file-server for arm64
+echo "Compiling file-server.ts for linux-arm64..."
+bun build --compile ./file-server.ts --target=bun-linux-arm64 --outfile=file-server-arm64
+
+if [ -f "./file-server-arm64" ]; then
+    echo "✓ Build successful! Binary created: ./file-server-arm64"
+    ls -lh ./file-server-arm64
+else
+    echo "✗ arm64 build failed!"
+    exit 1
+fi
+
+echo ""
+echo "All binaries built successfully!"
+echo "  - http-proxy-x64, http-proxy-arm64"
+echo "  - file-server-x64, file-server-arm64"

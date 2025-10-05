@@ -4,9 +4,10 @@ interface Props {
   status: ServerStatus | null;
   info: ServerInfo | null;
   serverState?: 'stopped' | 'starting' | 'running' | 'stopping';
+  startupStep?: string | null;
 }
 
-export function ServerStatus({ status, info, serverState }: Props) {
+export function ServerStatus({ status, info, serverState, startupStep }: Props) {
   // Show starting state
   if (serverState === 'starting') {
     return (
@@ -77,7 +78,7 @@ export function ServerStatus({ status, info, serverState }: Props) {
           fontSize: '0.875rem',
           textAlign: 'center',
         }}>
-          Initializing Minecraft server...
+          {startupStep || 'Initializing Minecraft server...'}
         </div>
       </div>
     );

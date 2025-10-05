@@ -1,6 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
+# Create status directory and set permissions
+sudo mkdir -p /status
+sudo chown 1000:1000 /status
+sudo chmod 755 /status
+
+# Helper function to write startup status
+write_status() {
+  echo "$1" | sudo tee /status/step.txt > /dev/null
+  sudo chown 1000:1000 /status/step.txt
+  sudo chmod 644 /status/step.txt
+  echo "[Status] $1"
+}
+
 do_optional_plugins() {
   # Temporarily disable exit-on-error for this function
   set +e
@@ -36,6 +49,7 @@ do_optional_plugins() {
   # Re-enable exit-on-error
   set -e
 }
+
 start_tailscale() {
 
   if ! command -v tailscaled >/dev/null 2>&1; then
@@ -117,22 +131,6 @@ configure_dynmap() {
   cat /data/plugins/dynmap/configuration.txt
 }
 
-configure_playit() {
-  if [ -z "${PLAYIT_SECRET:-}" ]; then
-    echo "Skipping playit.gg configuration (no PLAYIT_SECRET found)"
-    return
-  fi
-
-  echo "Configuring playit.gg..."
-  mkdir -p /data/plugins/playit-gg
-
-  # Write the config.yml file
-  cat > /data/plugins/playit-gg/config.yml << EOF
-agent-secret: '${PLAYIT_SECRET}'
-EOF
-
-  echo "playit.gg configuration complete"
-}
 
 start_http_proxy() {
   echo "Starting HTTP proxy server..."
@@ -206,109 +204,316 @@ start_http_proxy() {
       sleep 2
     done
   ) &
+  HTTP_PROXY_PID=$!
   
-  echo "HTTP proxy server started in background"
+  echo "HTTP proxy server started in background (PID: $HTTP_PROXY_PID)"
 }
 
 start_file_server() {
   echo "Starting file server on port 8083..."
   
-  # Create a simple Python HTTP server that serves files
-  cat > /tmp/file_server.py << 'PYEOF'
-import http.server
-import socketserver
-import os
-import sys
-
-class FileServerHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        # Remove leading slash and decode URL path
-        path = self.path.lstrip('/')
-        if not path:
-            path = '/'
-        
-        # Use absolute path
-        if not path.startswith('/'):
-            path = '/' + path
-        
-        try:
-            # Check if path exists
-            if not os.path.exists(path):
-                self.send_error(404, "File not found")
-                return
-            
-            # Check if it's a directory
-            if os.path.isdir(path):
-                self.send_error(404, "Path is a directory")
-                return
-            
-            # Try to read the file
-            with open(path, 'rb') as f:
-                content = f.read()
-            
-            # Send successful response
-            self.send_response(200)
-            self.send_header("Content-type", "application/octet-stream")
-            self.send_header("Content-Length", str(len(content)))
-            self.end_headers()
-            self.wfile.write(content)
-            
-        except PermissionError:
-            self.send_error(500, "Permission denied")
-        except Exception as e:
-            self.send_error(500, f"Internal server error: {str(e)}")
+  # Detect architecture
+  ARCH=$(uname -m)
+  echo "Detected architecture: $ARCH"
+  
+  # Determine the order to try binaries based on architecture
+  if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
+    # x86_64 system - try x64 first, then arm64
+    BINARIES=("/usr/local/bin/file-server-x64" "/usr/local/bin/file-server-arm64")
+    NAMES=("x64" "arm64")
+  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+    # ARM64 system - try arm64 first, then x64
+    BINARIES=("/usr/local/bin/file-server-arm64" "/usr/local/bin/file-server-x64")
+    NAMES=("arm64" "x64")
+  else
+    # Unknown architecture - try both starting with x64
+    echo "Warning: Unknown architecture $ARCH"
+    BINARIES=("/usr/local/bin/file-server-x64" "/usr/local/bin/file-server-arm64")
+    NAMES=("x64" "arm64")
+  fi
+  
+  FILE_SERVER_BINARY=""
+  
+  # Try each binary in order
+  for i in 0 1; do
+    BINARY="${BINARIES[$i]}"
+    NAME="${NAMES[$i]}"
     
-    def log_message(self, format, *args):
-        # Log to stdout
-        sys.stdout.write("[file-server] %s - - [%s] %s\n" %
-                         (self.address_string(),
-                          self.log_date_time_string(),
-                          format%args))
-
-PORT = 8083
-Handler = FileServerHandler
-
-with socketserver.TCPServer(("0.0.0.0", PORT), Handler) as httpd:
-    print(f"File server listening on port {PORT}")
-    httpd.serve_forever()
-PYEOF
-
-  # Run the file server in a background loop for auto-restart
+    if [ ! -x "$BINARY" ]; then
+      echo "Binary $NAME not found or not executable"
+      continue
+    fi
+    
+    echo "Testing $NAME binary..."
+    
+    # Try to execute and check for errors
+    # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
+    if timeout 2 "$BINARY" --help >/dev/null 2>&1; then
+      echo "✓ $NAME binary is compatible"
+      FILE_SERVER_BINARY="$BINARY"
+      break
+    else
+      EXIT_CODE=$?
+      if [ $EXIT_CODE -eq 126 ] || [ $EXIT_CODE -eq 133 ]; then
+        echo "✗ $NAME binary: Architecture mismatch (exit code $EXIT_CODE)"
+      elif [ $EXIT_CODE -eq 124 ]; then
+        echo "✓ $NAME binary timed out but seems to work (this is OK)"
+        FILE_SERVER_BINARY="$BINARY"
+        break
+      else
+        echo "✗ $NAME binary failed with exit code $EXIT_CODE"
+      fi
+    fi
+  done
+  
+  if [ -z "$FILE_SERVER_BINARY" ]; then
+    echo "Warning: No compatible file server binary found, skipping..."
+    return
+  fi
+  
+  echo "Using file server binary: $FILE_SERVER_BINARY"
+  
+  # Run the file server in background with auto-restart
   (
     while true; do
       echo "Starting file server (attempt at $(date))"
-      python3 /tmp/file_server.py || echo "File server crashed, restarting in 2 seconds..."
+      $FILE_SERVER_BINARY || echo "File server crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) &
+  FILE_SERVER_PID=$!
   
-  echo "File server started in background"
+  echo "File server started in background (PID: $FILE_SERVER_PID)"
 }
+
+backup_on_shutdown() {
+  echo "Performing backup before shutdown..."
+  
+  # Backup each world directory and plugins via file server
+  local dir='/data'
+  echo "Backing up $dir..."
+    
+  # Use curl to trigger backup via file server on port 8083
+  if curl -s -f "http://localhost:8083${dir}?backup=true" > /tmp/backup_result.json 2>&1; then
+    echo "✓ Backup completed for $dir"
+    cat /tmp/backup_result.json
+  else
+    echo "✗ Warning: Backup failed for $dir (continuing anyway)"
+    cat /tmp/backup_result.json 2>&1 || true
+  fi
+  
+  echo "Backup process completed"
+}
+
+kill_background_processes() {
+  echo "Killing background processes..."
+  
+  # Kill file server process and its children
+  if [ -n "${FILE_SERVER_PID:-}" ]; then
+    echo "Killing file server (PID: $FILE_SERVER_PID) and its children..."
+    # Kill the entire process group
+    pkill -KILL -P "$FILE_SERVER_PID" 2>/dev/null || true
+    kill -KILL "$FILE_SERVER_PID" 2>/dev/null || true
+  fi
+  
+  # Kill HTTP proxy process and its children
+  if [ -n "${HTTP_PROXY_PID:-}" ]; then
+    echo "Killing HTTP proxy (PID: $HTTP_PROXY_PID) and its children..."
+    # Kill the entire process group
+    pkill -KILL -P "$HTTP_PROXY_PID" 2>/dev/null || true
+    kill -KILL "$HTTP_PROXY_PID" 2>/dev/null || true
+  fi
+  
+  echo "Background processes terminated"
+}
+
+handle_shutdown() {
+  echo "Received SIGTERM, initiating graceful shutdown..."
+  
+  # Forward SIGTERM to the main process (Minecraft server)
+  if [ -n "${MAIN_PID:-}" ]; then
+    echo "Sending SIGTERM to main process (PID: $MAIN_PID)..."
+    kill -TERM "$MAIN_PID" 2>/dev/null || true
+    
+    # Wait for main process to exit gracefully (with timeout)
+    echo "Waiting for main process to exit gracefully..."
+    for i in $(seq 1 60); do
+      if ! kill -0 "$MAIN_PID" 2>/dev/null; then
+        echo "Main process exited gracefully"
+        break
+      fi
+      sleep 1
+    done
+    
+    # Force kill if still running after timeout
+    if kill -0 "$MAIN_PID" 2>/dev/null; then
+      echo "Main process did not exit in time, forcing shutdown..."
+      kill -KILL "$MAIN_PID" 2>/dev/null || true
+    fi
+  fi
+  
+  # Run backup after main process has stopped
+  backup_on_shutdown
+  
+  # Kill all background processes
+  kill_background_processes
+  
+  # Exit
+  echo "Shutdown complete"
+  exit 0
+}
+
+restore_from_backup() {
+  echo "Checking for available backups to restore..."
+  write_status "Checking for backups"
+  
+  # Check if we have AWS credentials configured
+  if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_ENDPOINT_URL:-}" ] || [ -z "${DATA_BUCKET_NAME:-${DYNMAP_BUCKET:-}}" ]; then
+    echo "No R2 credentials found, skipping restore"
+    return
+  fi
+  
+  BUCKET="${DATA_BUCKET_NAME:-${DYNMAP_BUCKET:-}}"
+  
+  # Wait for file server to be ready (max 30 seconds)
+  echo "Waiting for file server to be ready..."
+  write_status "Waiting for file server"
+  for i in $(seq 1 60); do
+    # Check if file server responds (even with 404, it means it's running)
+    if curl -s -o /dev/null -w "%{http_code}" "http://localhost:8083/" 2>/dev/null | grep -q "^[0-9]\{3\}$"; then
+      echo "File server is ready"
+      break
+    fi
+    if [ $i -eq 60 ]; then
+      echo "Warning: File server did not become ready, skipping restore"
+      return 1
+    fi
+    sleep 0.5
+  done
+  
+  # Wait for HTTP proxy control connection to be established (max 30 seconds)
+  echo "Waiting for HTTP proxy control connection..."
+  write_status "Waiting for HTTP proxy connection"
+  for i in $(seq 1 60); do
+    PROXY_STATUS=$(curl -s "http://localhost:3128/healthcheck" 2>/dev/null || echo "")
+    if [ "$PROXY_STATUS" = "CONNECTED" ]; then
+      echo "HTTP proxy control connection is CONNECTED"
+      break
+    fi
+    if [ $i -eq 60 ]; then
+      echo "Warning: HTTP proxy control connection not established, skipping restore"
+      return 1
+    fi
+    if [ -n "$PROXY_STATUS" ]; then
+      echo "HTTP proxy status: $PROXY_STATUS (waiting for CONNECTED...)"
+    fi
+    sleep 0.5
+  done
+  
+  # Restore the entire /data directory
+  dir_name="data"
+  
+  # Check if directory already exists and has content (e.g., level.dat indicates a world exists)
+  if [ -d "/$dir_name" ] && [ -f "/$dir_name/level.dat" ]; then
+    echo "Directory /$dir_name already exists with world data (level.dat found), skipping restore"
+    return
+  fi
+  
+  echo "Looking for backups for $dir_name..."
+  
+  # List backups for this directory from R2
+  # Note: S3 list returns keys in lexicographic (alphabetical) ascending order
+  # Our backup naming uses reverse-epoch seconds as prefix, so ascending order = newest first
+  # Format: backups/<reverseEpochSec>_<YYYYMMDDHH>_<dir>.tar.gz
+  LIST_URL="${AWS_ENDPOINT_URL}/${BUCKET}/?prefix=backups/&delimiter="
+  
+  if ! BACKUP_LIST=$(curl -s -f "$LIST_URL" 2>&1); then
+    echo "Warning: Failed to list backups for $dir_name, skipping restore"
+    return 1
+  fi
+  
+  # Extract backup keys that end with _<dir_name>.tar.gz
+  # S3 returns them in ascending lex order, which means newest-first due to reverse-epoch prefix
+  # Just take the first match (newest)
+  LATEST_BACKUP=$(echo "$BACKUP_LIST" | grep -o '<Key>backups/[^<]*_'"${dir_name}"'\.tar\.gz</Key>' | sed 's/<Key>//g' | sed 's|</Key>||g' | head -n 1)
+  
+  if [ -z "$LATEST_BACKUP" ]; then
+    echo "No backups found for $dir_name, skipping restore"
+    return
+  fi
+  
+  echo "Found latest backup: $LATEST_BACKUP"
+  echo "Restoring $dir_name from $LATEST_BACKUP..."
+  write_status "Restoring world data from backup"
+  
+  # Call the file server restore endpoint
+  RESTORE_URL="http://localhost:8083/${dir_name}?restore=${LATEST_BACKUP}"
+  
+  if curl -s -f "$RESTORE_URL" > /tmp/restore_result.json 2>&1; then
+    echo "✓ Restore completed for $dir_name"
+    cat /tmp/restore_result.json
+  else
+    echo "✗ Warning: Restore failed for $dir_name"
+    cat /tmp/restore_result.json 2>&1 || true
+  fi
+  
+  echo "Restore process completed"
+}
+
 
 printenv
 
+write_status "Initializing services"
+
 echo "Starting services..."
 
+# Start the file server
+write_status "Starting file server"
+start_file_server
+
+# Start the HTTP proxy server
+write_status "Starting HTTP proxy"
+start_http_proxy
+
 # Install optional plugins
+write_status "Installing optional plugins"
 do_optional_plugins || true
 
 # Start Tailscale in background
-# start_tailscale
+start_tailscale
 
 # Configure Dynmap if R2 credentials are available
-configure_dynmap
+write_status "Configuring Dynmap"
+# configure_dynmap
 
-# Configure playit.gg if PLAYIT_SECRET is available
-# configure_playit
 
-# Start the HTTP proxy server
-start_http_proxy
-
-# Start the file server
-start_file_server
+# Restore from backups before starting Minecraft server
+write_status "Checking for backups to restore"
+restore_from_backup || (sleep 15 && restore_from_backup)
 
 echo "Services started, launching main application..."
 echo "Command: $@"
 
-# Execute the main command (Minecraft server) & pipe to hteetp
-exec "$@" | hteetp --host 0.0.0.0 --port 8082 --size 1M --text
+write_status "Starting Minecraft server"
+
+# Set up SIGTERM trap
+trap handle_shutdown SIGTERM
+
+# Execute the main command (Minecraft server) & pipe to hteetp in background
+"$@" | hteetp --host 0.0.0.0 --port 8082 --size 1M --text &
+MAIN_PID=$!
+
+echo "Main process started with PID: $MAIN_PID"
+write_status "Minecraft server running"
+
+# Wait for main process to exit
+wait "$MAIN_PID"
+EXIT_CODE=$?
+
+echo "Main process exited with code: $EXIT_CODE, performing backup..."
+backup_on_shutdown
+
+# Kill all background processes
+kill_background_processes
+
+exit $EXIT_CODE

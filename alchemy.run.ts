@@ -1,9 +1,8 @@
 /// <reference types="@types/node" />
 
 import alchemy from "alchemy";
-import { RandomString } from "alchemy/random";
+import { CloudflareStateStore } from "alchemy/state";
 import { Container, R2Bucket, BunSPA, Worker } from "alchemy/cloudflare";
-import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { MinecraftContainer } from "./src/container.ts";
 
 const app = await alchemy("cloudflare-container", {
@@ -63,6 +62,16 @@ const dynmapBucket = await R2Bucket("dynmap-tiles", {
   ]
 });
 
+// R2 bucket for Server game data
+const dataBucket = await R2Bucket("data-backups-bucket", {
+  name: `${app.name}-data-backups`,
+  dev: {
+    remote: true,
+  },
+  adopt: true,
+  allowPublicAccess: false,
+});
+
 // Create API token for R2 access (S3-compatible credentials)
 // This generates accessKeyId and secretAccessKey for Dynmap's S3 SDK
 // const r2Token = await AccountApiToken("dynmap-r2-token", {
@@ -99,7 +108,6 @@ export const worker = await BunSPA("minecraft-site", {
   compatibilityDate: "2025-09-27",
   bindings: {
     MINECRAFT_CONTAINER: container,
-    // DYNMAP_BUCKET: dynmapBucket,
 
     // Secrets for Tailscale
     TS_AUTHKEY: alchemy.secret(process.env.TS_AUTHKEY || "null"),
@@ -110,18 +118,19 @@ export const worker = await BunSPA("minecraft-site", {
     // R2_ACCESS_KEY_ID: r2Token.accessKeyId,
     // R2_SECRET_ACCESS_KEY: r2Token.secretAccessKey,
 
-    // R2 S3-compatible endpoint URL for container
-    R2_ENDPOINT: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-
     // Bucket name (passed to container for Dynmap config)
-    R2_BUCKET_NAME: dynmapBucket.name,
+    DYNMAP_BUCKET_NAME: dynmapBucket.name,
+    DYNMAP_BUCKET: dynmapBucket,
 
-    R2_BUCKET: dynmapBucket,
+    // Data bucket for server game data
+    DATA_BUCKET_NAME: dataBucket.name,
+    DATA_BUCKET: dataBucket,
     
     // Dynmap worker URL for iframe embedding
     DYNMAP_WORKER_URL: dynmapWorker.url ?? "",
   },
 });
+
 
 console.log("Worker URL:", worker.url);
 console.log("Dynmap URL:", `https://${dynmapBucket.domain}`);

@@ -12,6 +12,7 @@ export function useServerData(isAuthenticated: boolean) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [serverState, setServerState] = useState<ServerState>('stopped');
+  const [startupStep, setStartupStep] = useState<string | null>(null);
   
   // Track active fetch calls for concurrency safety
   const activeFetches = useRef<Set<Promise<any>>>(new Set());
@@ -69,12 +70,24 @@ export function useServerData(isAuthenticated: boolean) {
             setLoading(true);
             setError(null);
             
+            // Fetch startup status to get the current step
+            try {
+              const startupStatusResponse = await fetchWithAuth(`/api/startup-status`);
+              const startupStatusData = await startupStatusResponse.json() as { status: string; startupStep: string | null };
+              if (startupStatusData.startupStep) {
+                setStartupStep(startupStatusData.startupStep);
+              }
+            } catch (err) {
+              console.log('Failed to fetch startup step:', err);
+            }
+            
             const statusResponse = await fetchWithAuth(`/api/status`);
             const statusData: ServerStatus = await statusResponse.json();
             setStatus(statusData);
             
             if (statusData.online) {
               setServerState('running');
+              setStartupStep(null); // Clear startup step when fully running
               
               // Also fetch players and info
               const playersResponse = await fetchWithAuth(`/api/players`);
@@ -247,6 +260,7 @@ export function useServerData(isAuthenticated: boolean) {
     loading,
     error,
     serverState,
+    startupStep,
     startServer,
     stopServer,
     refresh,

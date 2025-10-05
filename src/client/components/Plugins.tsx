@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import type { Plugin } from '../types/api';
 import { fetchApi } from '../utils/api';
 
 interface Props {
+  plugins: Plugin[];
   serverState: 'stopped' | 'starting' | 'running' | 'stopping';
   onPluginToggle: (filename: string, enabled: boolean) => Promise<void>;
 }
@@ -18,9 +19,7 @@ const PLUGIN_INFO: Record<string, { emoji: string; description: string }> = {
   }
 };
 
-export function Plugins({ serverState, onPluginToggle }: Props) {
-  const [plugins, setPlugins] = useState<Plugin[]>([]);
-  const [loading, setLoading] = useState(true);
+export function Plugins({ plugins, serverState, onPluginToggle }: Props) {
   const [hoveredInfo, setHoveredInfo] = useState<string | null>(null);
   const [hoveredWarning, setHoveredWarning] = useState<string | null>(null);
   const [hoveredToggle, setHoveredToggle] = useState<string | null>(null);
@@ -31,23 +30,6 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
   const [envFormData, setEnvFormData] = useState<Record<string, string>>({});
   const [envSaving, setEnvSaving] = useState(false);
   const [statusModalPlugin, setStatusModalPlugin] = useState<Plugin | null>(null);
-
-  const fetchPlugins = async () => {
-    try {
-      setLoading(true);
-      const response = await fetchApi('/api/plugins');
-      const data = await response.json() as { plugins: Plugin[] };
-      setPlugins(data.plugins || []);
-    } catch (error) {
-      console.error('Failed to fetch plugins:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchPlugins();
-  }, [serverState]);
 
   const openEnvModal = (plugin: Plugin, mode: 'edit' | 'enable') => {
     setEnvModalPlugin(plugin);
@@ -84,9 +66,9 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
       
       const result = await response.json() as { success: boolean; plugins?: Plugin[]; error?: string };
       
-      if (result.success && result.plugins) {
-        setPlugins(result.plugins);
+      if (result.success) {
         closeEnvModal();
+        // Parent will update plugins state via polling
       } else {
         alert(result.error || 'Failed to update plugin environment variables');
       }
@@ -124,7 +106,7 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
     try {
       setToggling(filename);
       await onPluginToggle(filename, newEnabled);
-      await fetchPlugins();
+      // Parent will update plugins state
     } catch (error) {
       console.error('Failed to toggle plugin:', error);
       alert(error instanceof Error ? error.message : 'Failed to toggle plugin');
@@ -199,30 +181,6 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
   };
 
   const canToggle = serverState === 'stopped';
-
-  if (loading && plugins.length === 0) {
-    return (
-      <div style={{
-        background: 'rgba(26, 46, 30, 0.4)',
-        backdropFilter: 'blur(10px)',
-        border: '1px solid rgba(87, 166, 78, 0.2)',
-        borderRadius: '16px',
-        padding: '32px',
-        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
-      }}>
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#888',
-          fontSize: '1rem',
-        }}>
-          <span style={{ marginRight: '10px', fontSize: '1.5rem' }}>⏳</span>
-          Loading plugins...
-        </div>
-      </div>
-    );
-  }
 
   return (
     <>

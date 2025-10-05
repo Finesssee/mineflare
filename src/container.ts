@@ -46,7 +46,7 @@ const PLUGIN_SPECS = [
       const status = await container.getStatus();
       // we can't talk to the container if it's not running
       if(status !== 'running') {
-        return { type: "no message" };
+        return { type: "warning", message: "connecting..." };
       }
       
       // need to read in the playit.gg config file
@@ -54,15 +54,30 @@ const PLUGIN_SPECS = [
       try{
         config = await container.getFileContents("/data/plugins/playit-gg/config.yml");
       } catch (error) {
-        console.log("Failed to get playit.gg config:", error);
+        console.log("playit.gg config not found. Usually that means we're just starting up for the first time");
+        return { type: "information", message: "connecting..." };
       }
-      console.log("playit.gg config", config);
       // find the line starting with agent-secret:
       const agentSecretLine = config?.split("\n").find(line => line.startsWith("agent-secret:"));
       // extract the following text and trim the whitespace and any single or double quotes
       const agentSecret = agentSecretLine?.split("agent-secret:")[1].trim().replace(/['"]/g, '');
       if(agentSecret) {
-        return { type: "information", message: "playit.gg secret is configured" };
+        // now we look for logs with the tunnel url
+        // [13:59:07 INFO]: [gg.playit.minecraft.PlayitKeysSetup] found minecraft java tunnel: internet-mary.gl.joinmc.link
+        // 2025-10-06 15:59:07 [13:59:07 INFO]: [gg.playit.minecraft.PlayitManager] keys and tunnel setup
+        // 2025-10-06 15:59:07 [13:59:07 INFO]: playit.gg: tunnel setup
+        // 2025-10-06 15:59:07 [13:59:07 INFO]: playit.gg: internet-mary.gl.joinmc.link
+        // check for either found minecraft java tunnel: <hostname> or playit.gg: <hostname> - we have to be strict about matching the hostname no spaces and it must fill the line
+        const logs = await container.getLogs();
+        // Match hostnames that contain at least one dot (e.g., "foo.bar")
+        const regex = /found minecraft java tunnel: ([^\s]*\.[^\s]+)$|^playit\.gg: ([^\s]*\.[^\s]+)$/gim;
+        const matches = [...logs.matchAll(regex)];
+        if(matches && matches.length > 0) {
+          const lastMatch = matches[matches.length - 1];
+          const hostname = lastMatch[1] || lastMatch[2];
+          return { type: "information", message: `Use ${hostname} as the server address to connect to your server via playit.gg` };
+        }
+        return { type: "information", message: `playit.gg secret is configured but no tunnel is connected. If playit.gg does not conncet in 5 minutes then check your playit.gg configuration for key starting ${agentSecret.slice(0, 8)}` };
       }
 
       // need to check if we find any matching url https://playit.gg/mc/<code>" using regex
@@ -107,13 +122,18 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
         RCON_PORT: "25575",
         INIT_MEMORY: "5G", // big containers
         MAX_MEMORY: "11G", // big containers
-        // R2 credentials for Dynmap S3 storage
+        // R2 credentials for Dynmap S3 storage and backups
         // AWS_ACCESS_KEY_ID: this.env.R2_ACCESS_KEY_ID,
         // AWS_SECRET_ACCESS_KEY: this.env.R2_SECRET_ACCESS_KEY,
-        // Random but properly formatted
+        // Random but properly formatted (not validated by our worker proxy)
         AWS_ACCESS_KEY_ID: "AKIAFAKEFAKEFAKE1234",
         AWS_SECRET_ACCESS_KEY: "RaNd0mFaKeS3cr3tK3yTh4t1s40Ch4r4ct3rsL0ng",
-        DYNMAP_BUCKET: this.env.R2_BUCKET_NAME,
+        // Worker URL for R2 proxy (used by Dynmap and backup system)
+        // Uses S3 path-style URLs: https://endpoint/bucket-name/key-name
+        AWS_ENDPOINT_URL: "http://localhost:3128",
+        DYNMAP_BUCKET: this.env.DYNMAP_BUCKET_NAME,
+        // Bucket for world data backups (uses same bucket as Dynmap by default)
+        DATA_BUCKET_NAME: this.env.DATA_BUCKET_NAME || this.env.DYNMAP_BUCKET_NAME,
         OPTIONAL_PLUGINS: this.pluginFilenamesToEnable.join(" "), // space separated for consumption by bash script start-with-services.sh
     };
     
@@ -129,7 +149,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
             id    INTEGER PRIMARY KEY,
             json_data BLOB
           );
-          INSERT OR IGNORE INTO state (id, json_data) VALUES (1, jsonb('{}'));
+          INSERT OR IGNORE INTO state (id, json_data) VALUES (1, jsonb('{"optionalPlugins": ["playit-minecraft-plugin"]}'));
           CREATE TABLE IF NOT EXISTS auth (
             id INTEGER PRIMARY KEY,
             salt TEXT,
@@ -291,11 +311,33 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
     private httpProxyLoopShouldStop: boolean = false;
 
     private stopping = false;
+    
     override async stop() {
       console.error("stopppppp");
-      this.stopping = true;
       this.recordSessionStop();
-      await super.stop("SIGTERM");
+      let backupSuccess = false;
+      // Perform backup before shutdown
+      try {
+        console.error("Triggering backup before container shutdown...");
+        const backupResult = await this.performBackup();
+        if (backupResult.success) {
+          backupSuccess = true;
+          console.error("Pre-shutdown backup completed successfully:", backupResult.backups);
+        } else {
+          console.error("Pre-shutdown backup failed:", backupResult.error);
+        }
+      } catch (error) {
+        console.error("Error during pre-shutdown backup (continuing with shutdown):", error);
+      }
+      // don't set stopping until after the backup is taken or it prevents rcon.
+      this.stopping = true;
+      // if backup failed, give the container a shot at it
+      if(!backupSuccess) {
+        await super.stop("SIGTERM");
+        return;
+      }
+      // just kill the container
+      await super.stop("SIGKILL");
     }
 
     // Optional lifecycle hooks
@@ -341,11 +383,13 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
       }
       try {
         console.error("Starting and waiting for ports");
-        await super.startAndWaitForPorts(8083, {
+        const portsPromise = super.startAndWaitForPorts(8083, {
             waitInterval: 250,
             instanceGetTimeoutMS: 2000,
-            portReadyTimeoutMS: 300000
+            portReadyTimeoutMS: 30_000
         });
+        this.ctx.waitUntil((new Promise(resolve => setTimeout(resolve, 2000))).then(() => this.initHTTPProxy()));
+        await portsPromise;
       } catch (error) {
         console.error("Error while starting ports but it's probably OK", error);
         const deadline = Date.now() + 5000;
@@ -405,6 +449,10 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
     return arr;
   }
 
+  private generateBackupId(): string {
+    return this.base64urlEncode(this.generateRandomBytes(12));
+  }
+
   // Async because it's easier to consume as RPC if fn is async
   public async setupPassword({ password }: { password: string }): Promise<{ created: boolean; symKey?: string }>{
     const run = async () => {
@@ -462,7 +510,17 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
     return await response.text();
   }
 
-  public async getFileContents(filePath: string): Promise<string> {
+  public override async containerFetch(request: Request | string | URL, port: number): Promise<Response> {
+    // container lib will start the container if it's stopped (at least in local dev)it's annoying AF
+    const status = await this.getStatus();
+    if(status !== 'stopped') {
+      return await super.containerFetch(request, port);
+    } else {
+      return new Response("Container is not running", { status: 502 });
+    }
+  }
+
+  public async getFileContents(filePath: string): Promise<string | null> {
     // Ensure the path starts with /
     const normalizedPath = filePath.startsWith('/') ? filePath : '/' + filePath;
     
@@ -471,7 +529,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
       
       if (!response.ok) {
         if (response.status === 404) {
-          throw new Error(`File not found: ${filePath}`);
+          return null;
         } else if (response.status === 500) {
           const errorText = await response.text();
           throw new Error(`Permission error or internal error: ${errorText}`);
@@ -501,8 +559,27 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
     } else if (status === 'stopped') {
       this.stopping = false;
       return status;
+    } else if (status === 'running') {
+      if(this.stopping) {
+        return 'stopping';
+      }
     }
     return status;
+  }
+
+  public async getStartupStep(): Promise<string | null> {
+    try {
+      const status = await this.getStatus();
+      if (status === 'stopped') {
+        return null;
+      }
+      
+      const content = await this.getFileContents("/status/step.txt");
+      return content?.trim() ?? null;
+    } catch (error) {
+      // File doesn't exist yet or can't be read
+      return null;
+    }
   }
 
   // Async because it's easier to consume as RPC if fn is async
@@ -725,6 +802,17 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
             headers: { "Content-Type": "application/json" }
           });
         }
+
+        if (url.pathname === "/status" || url.pathname === "/startup-status") {
+          const containerStatus = await this.getStatus();
+          const startupStep = await this.getStartupStep();
+          return new Response(JSON.stringify({ 
+            status: containerStatus, 
+            startupStep 
+          }), {
+            headers: { "Content-Type": "application/json" }
+          });
+        }
         
         if (url.pathname === "/rcon/players") {
           const players = await this.getRconPlayers();
@@ -754,7 +842,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
     }
   
     // Initialize RCON connection
-    private async initRcon(): Promise<Rcon | null> {
+    private async initRcon(maxAttempts = 10): Promise<Rcon | null> {
       const status = await this.getStatus();
       if(status === 'stopped' || status === 'stopping') {
         return null;
@@ -786,7 +874,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
         this.rcon = new Promise(async (resolve, reject) => {
           try {
             const rcon = new Rcon(port, "minecraft", () => this.getStatus());
-            await rcon.connect();
+            await rcon.connect(maxAttempts);
             console.error("RCON connected");
             this.lastRconSuccess = new Date();
             resolve(rcon);
@@ -1051,6 +1139,140 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
       }
     }
 
+    /**
+     * Perform a backup of world data to R2
+     * This will:
+     * 1. Save and disable world saving via RCON
+     * 2. Backup world directories to R2
+     * 3. Re-enable world saving
+     */
+    public async performBackup(): Promise<{ 
+      success: boolean; 
+      backups: Array<{ path: string; size: number }>;
+      error?: string;
+    }> {
+      console.error("Starting backup process...");
+      
+      try {
+        try {
+          // Step 1: Ensure RCON is initialized
+            const rcon = await this.initRcon(2);
+            if (!rcon) {
+              throw new Error("RCON not available - server may be offline");
+            }
+            
+            // Step 2: Execute save-all flush to ensure all data is written
+            console.error("Executing save-all flush...");
+            await rcon.send("save-all flush");
+            console.error("Pausing dynmap rendering");
+            await rcon.send("dynmap pause all")
+            
+            // TODO: Poll the logs to check if the save-all flush is complete
+            // Wait a moment for save to complete
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Step 3: Disable auto-saving
+            console.error("Disabling auto-save...");
+            await rcon.send("save-off");
+        } catch (error) {
+          console.error("Error during save-all flush, proceeding with disk backup anyway", error);
+        }
+        try {
+          // Step 4: Backup all the data
+          const worldDirs = [
+            '/data'
+          ];
+
+          const POLL_INTERVAL_MS = 2000;
+          const POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes per job
+
+          const runOne = async (worldDir: string): Promise<{ path: string; size: number } | null> => {
+            console.error(`Backing up ${worldDir} (background)...`);
+            const backupId = this.generateBackupId();
+
+            // Trigger start
+            const startResp = await this.containerFetch(
+              `http://localhost:8083${worldDir}?backup=true&backup_id=${backupId}`,
+              8083
+            );
+            if (!startResp.ok) {
+              const errorText = await startResp.text();
+              console.error(`Failed to start backup ${worldDir}: ${startResp.status} ${errorText}`);
+              return null;
+            }
+
+            const deadline = Date.now() + POLL_TIMEOUT_MS;
+            while (true) {
+              if (Date.now() > deadline) {
+                console.error(`Backup timed out for ${worldDir}`);
+                return null;
+              }
+              const statusResp = await this.containerFetch(
+                `http://localhost:8083/backup-status?id=${backupId}`,
+                8083
+              );
+              if (!statusResp.ok) {
+                await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+                continue;
+              }
+              const status = await statusResp.json() as {
+                status: 'pending' | 'running' | 'success' | 'failed' | 'not_found';
+                result?: { backup_path: string; size: number } | null;
+                error?: string | null;
+              };
+              if (status.status === 'success' && status.result) {
+                console.error(`Backup completed for ${worldDir}:`, status.result);
+                return { path: status.result.backup_path, size: status.result.size };
+              }
+              if (status.status === 'failed') {
+                console.error(`Failed to backup ${worldDir}: ${status.error || 'unknown error'}`);
+                return null;
+              }
+              await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+            }
+          };
+
+          // Launch all jobs concurrently
+          const settlements = await Promise.allSettled(worldDirs.map(runOne));
+          const backupResults: Array<{ path: string; size: number }> = [];
+          for (const s of settlements) {
+            if (s.status === 'fulfilled' && s.value) backupResults.push(s.value);
+          }
+
+          const allSucceeded = backupResults.length === worldDirs.length;
+          console.error(allSucceeded 
+            ? "All backups completed successfully" 
+            : `Partial backup: ${backupResults.length}/${worldDirs.length} succeeded`);
+          return { success: allSucceeded, backups: backupResults };
+
+        } finally {
+          // Step 5: Always re-enable auto-saving, even if backup failed
+          console.error("Re-enabling auto-save...");
+          try {
+            const rcon = await this.initRcon();
+            if (!rcon) {
+              throw new Error("RCON not available - server may be offline");
+            }
+            await rcon.send("save-on");
+            console.error("Auto-save re-enabled");
+            await rcon.send("dynmap pause none") // wierd syntax but this means resume
+            console.error("Dynmap resumed")
+          } catch (error) {
+            console.error("Failed to re-enable auto-save:", error);
+            // Don't throw here - we want to return the backup results
+          }
+        }
+        
+      } catch (error) {
+        console.error("Backup process failed:", error);
+        return {
+          success: false,
+          backups: [],
+          error: String(error)
+        };
+      }
+    }
+
     async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string) {
       // Upon receiving a message from the client, reply with the same message,
       // but will prefix the message with "[Durable Object]: " and return the number of connections.
@@ -1084,17 +1306,33 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
       // Path-style: /bucket-name/path/to/object
       // Virtual-hosted: /path/to/object (bucket name in hostname)
       let pathname = url.pathname;
-      const bucketName = this.env.R2_BUCKET_NAME;
-      console.error("Fetching from R2", url.pathname, bucketName);
-      if (bucketName && pathname.startsWith(`/${bucketName}`)) {
+      if(pathname.startsWith("/r2")) {
+        pathname = pathname.slice(3);
+        // if first character is not a slash, add one
+        if(pathname[0] !== "/") {
+          pathname = "/" + pathname;
+        }
+      }
+      const publicBucketName = this.env.DYNMAP_BUCKET_NAME;
+      const privateBucketName = this.env.DATA_BUCKET_NAME;
+      // default to public bucket
+      let bucketToUse = this.env.DYNMAP_BUCKET;
+      console.error("Fetching from R2", url.pathname);
+      if (publicBucketName && pathname.startsWith(`/${publicBucketName}`)) {
         // Strip the bucket name prefix
-        pathname = pathname.slice(bucketName.length + 1); // +1 for the leading slash
+        pathname = pathname.slice(publicBucketName.length + 1); // +1 for the leading slash
         if(pathname === "") {
           pathname = "/";
         }
-      } else if (bucketName && pathname === `/${bucketName}`) {
-        // Handle case where path is exactly /bucket-name (list operation)
-        pathname = "/";
+        bucketToUse = this.env.DYNMAP_BUCKET;
+      }
+      else if (privateBucketName && pathname.startsWith(`/${privateBucketName}`)) {
+        // Strip the bucket name prefix
+        pathname = pathname.slice(privateBucketName.length + 1); // +1 for the leading slash
+        if(pathname === "") {
+          pathname = "/";
+        }
+        bucketToUse = this.env.DATA_BUCKET;
       }
       
       if(pathname === "/") {
@@ -1108,7 +1346,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
         const maxKeys = parseInt(url.searchParams.get("max-keys") ?? "1000");
         const continuationToken = url.searchParams.get("continuation-token");
         
-        const list = await this.env.R2_BUCKET.list({
+        const list = await bucketToUse.list({
           prefix: prefix,
           delimiter: delimiter,
           limit: maxKeys,
@@ -1172,8 +1410,140 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
       }
       const pathWithoutLeadingSlash = pathname.startsWith('/') ? pathname.slice(1) : pathname;
       switch(request.method) {
+        case "POST": {
+          // AWS S3 CreateMultipartUpload: POST /key?uploads
+          // AWS S3 CompleteMultipartUpload: POST /key?uploadId=ID
+          const uploadId = url.searchParams.get("uploadId");
+          
+          if (url.searchParams.has("uploads")) {
+            // CreateMultipartUpload
+            console.error("Creating multipart upload for:", pathWithoutLeadingSlash);
+            const contentType = request.headers.get("Content-Type") || undefined;
+            const md5Header = request.headers.get("Content-MD5");
+            const cacheControl = request.headers.get("Cache-Control") || undefined;
+            const contentDisposition = request.headers.get("Content-Disposition") || undefined;
+            const contentEncoding = request.headers.get("Content-Encoding") || undefined;
+            const contentLanguage = request.headers.get("Content-Language") || undefined;
+            
+            const multipart = await bucketToUse.createMultipartUpload(pathWithoutLeadingSlash, {
+              httpMetadata: {
+                ...(contentType ? { contentType } : {}),
+                ...(cacheControl ? { cacheControl } : {}),
+                ...(contentDisposition ? { contentDisposition } : {}),
+                ...(contentEncoding ? { contentEncoding } : {}),
+                ...(contentLanguage ? { contentLanguage } : {}),
+              },
+              ...(md5Header ? { customMetadata: { md5: md5Header } } : {}),
+            });
+
+            const escapeXml = (str: string) =>
+              str.replace(/&/g, '&amp;')
+                 .replace(/</g, '&lt;')
+                 .replace(/>/g, '&gt;')
+                 .replace(/"/g, '&quot;')
+                 .replace(/'/g, '&apos;');
+
+            const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Bucket>r2-bucket</Bucket>
+  <Key>${escapeXml(pathWithoutLeadingSlash)}</Key>
+  <UploadId>${multipart.uploadId}</UploadId>
+</InitiateMultipartUploadResult>`;
+
+            console.error("Multipart upload created with uploadId:", multipart.uploadId);
+            return new Response(xml, {
+              headers: {
+                "Content-Type": "application/xml",
+                "x-amz-request-id": this.ctx.id.toString(),
+              },
+            });
+          }
+          
+          if (uploadId) {
+            // CompleteMultipartUpload
+            console.error("Completing multipart upload:", uploadId, "for:", pathWithoutLeadingSlash);
+            const bodyText = await request.text();
+            console.error("Complete multipart body:", bodyText);
+
+            // Parse parts from XML body
+            // Format: <CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>"etag"</ETag></Part>...</CompleteMultipartUpload>
+            const partRegex = /<Part>\s*<PartNumber>\s*(\d+)\s*<\/PartNumber>\s*<ETag>\s*([^<]+)\s*<\/ETag>\s*<\/Part>/gi;
+            const parts: { partNumber: number; etag: string }[] = [];
+            for (const m of bodyText.matchAll(partRegex)) {
+              let etag = m[2].trim();
+              // Remove quotes if present (AWS sometimes includes them, sometimes doesn't)
+              if (etag.startsWith('"') && etag.endsWith('"')) {
+                etag = etag.slice(1, -1);
+              }
+              if (etag.startsWith('&quot;') && etag.endsWith('&quot;')) {
+                etag = etag.slice(6, -6);
+              }
+              parts.push({ partNumber: parseInt(m[1], 10), etag });
+            }
+
+            console.error("Parsed parts:", parts);
+
+            if (parts.length === 0) {
+              return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+    <Code>MalformedXML</Code>
+    <Message>The XML you provided was not well-formed or did not validate against our published schema</Message>
+    <RequestId>${this.ctx.id.toString()}</RequestId>
+    <HostId>${this.ctx.id.toString()}</HostId>
+</Error>`, {
+                status: 400,
+                headers: {
+                  "Content-Type": "application/xml",
+                  "x-amz-request-id": this.ctx.id.toString(),
+                },
+              });
+            }
+
+            const multipartUpload = bucketToUse.resumeMultipartUpload(pathWithoutLeadingSlash, uploadId);
+            const object = await multipartUpload.complete(parts);
+
+            const escapeXml = (str: string) =>
+              str.replace(/&/g, '&amp;')
+                 .replace(/</g, '&lt;')
+                 .replace(/>/g, '&gt;')
+                 .replace(/"/g, '&quot;')
+                 .replace(/'/g, '&apos;');
+
+            const location = `${url.origin}${url.pathname}`;
+            const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Location>${escapeXml(location)}</Location>
+  <Bucket>r2-bucket</Bucket>
+  <Key>${escapeXml(pathWithoutLeadingSlash)}</Key>
+  <ETag>&quot;${escapeXml(object.etag)}&quot;</ETag>
+</CompleteMultipartUploadResult>`;
+
+            console.error("Multipart upload completed successfully");
+            return new Response(xml, {
+              headers: {
+                "Content-Type": "application/xml",
+                "ETag": `"${object.etag}"`,
+                "x-amz-request-id": this.ctx.id.toString(),
+              },
+            });
+          }
+
+          return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+    <Code>InvalidRequest</Code>
+    <Message>POST requires either ?uploads or ?uploadId parameter</Message>
+    <RequestId>${this.ctx.id.toString()}</RequestId>
+    <HostId>${this.ctx.id.toString()}</HostId>
+</Error>`, { 
+            status: 400,
+            headers: {
+              "Content-Type": "application/xml",
+              "x-amz-request-id": this.ctx.id.toString(),
+            }
+          });
+        }
         case "HEAD": {
-          const obj = await this.env.R2_BUCKET.head(pathWithoutLeadingSlash);
+          const obj = await bucketToUse.head(pathWithoutLeadingSlash);
           if (!obj) {
             return new Response(null, { 
               status: 404,
@@ -1214,20 +1584,27 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
             }
           }
           
+          const responseHeaders: Record<string, string> = {
+            "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream",
+            "Content-Length": obj.size.toString(),
+            "ETag": objectETag,
+            "Last-Modified": obj.uploaded.toUTCString(),
+            "Accept-Ranges": "bytes",
+            "x-amz-request-id": this.ctx.id.toString(),
+          };
+          
+          // Include MD5 hash if stored in customMetadata
+          if (obj.customMetadata?.md5) {
+            responseHeaders["x-amz-meta-md5"] = obj.customMetadata.md5;
+          }
+          
           return new Response(null, { 
             status: 200,
-            headers: {
-              "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream",
-              "Content-Length": obj.size.toString(),
-              "ETag": objectETag,
-              "Last-Modified": obj.uploaded.toUTCString(),
-              "Accept-Ranges": "bytes",
-              "x-amz-request-id": this.ctx.id.toString(),
-            }
+            headers: responseHeaders
           });
         }
         case "GET": {
-          const obj = await this.env.R2_BUCKET.get(pathWithoutLeadingSlash);
+          const obj = await bucketToUse.get(pathWithoutLeadingSlash);
           if (!obj) {
             // simulate aws s3 error
             return new Response(`<?xml version="1.0" encoding="UTF-8"?>
@@ -1279,20 +1656,133 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
             }
           }
           
+          const responseHeaders: Record<string, string> = {
+            "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream",
+            "Content-Length": obj.size.toString(),
+            "ETag": objectETag,
+            "Last-Modified": obj.uploaded.toUTCString(),
+            "Accept-Ranges": "bytes",
+            "x-amz-request-id": this.ctx.id.toString(),
+          };
+          
+          // Include MD5 hash if stored in customMetadata
+          if (obj.customMetadata?.md5) {
+            responseHeaders["x-amz-meta-md5"] = obj.customMetadata.md5;
+          }
+          
           return new Response(obj.body as unknown as ReadableStream, {
-            headers: {
-              "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream",
-              "Content-Length": obj.size.toString(),
-              "ETag": objectETag,
-              "Last-Modified": obj.uploaded.toUTCString(),
-              "Accept-Ranges": "bytes",
-              "x-amz-request-id": this.ctx.id.toString(),
-            },
+            headers: responseHeaders,
           });
           
         }
         case "PUT": {
-          const obj = await this.env.R2_BUCKET.put(pathWithoutLeadingSlash, request.body as unknown as ArrayBuffer);
+          // AWS S3 UploadPart: PUT /key?partNumber=N&uploadId=ID
+          const uploadId = url.searchParams.get("uploadId");
+          const partNumberParam = url.searchParams.get("partNumber");
+          
+          if (uploadId && partNumberParam) {
+            // Upload a single part of a multipart upload
+            const partNumber = parseInt(partNumberParam, 10);
+            console.error(`Uploading part ${partNumber} for uploadId ${uploadId}`);
+            
+            if (!request.body) {
+              return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+    <Code>MissingRequestBodyError</Code>
+    <Message>Request body is empty</Message>
+    <RequestId>${this.ctx.id.toString()}</RequestId>
+    <HostId>${this.ctx.id.toString()}</HostId>
+</Error>`, { 
+                status: 400,
+                headers: {
+                  "Content-Type": "application/xml",
+                  "x-amz-request-id": this.ctx.id.toString(),
+                }
+              });
+            }
+            
+            // Validate part number (AWS S3 allows 1-10000)
+            if (partNumber < 1 || partNumber > 10000) {
+              return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+    <Code>InvalidArgument</Code>
+    <Message>Part number must be an integer between 1 and 10000, inclusive</Message>
+    <ArgumentName>partNumber</ArgumentName>
+    <ArgumentValue>${partNumber}</ArgumentValue>
+    <RequestId>${this.ctx.id.toString()}</RequestId>
+    <HostId>${this.ctx.id.toString()}</HostId>
+</Error>`, {
+                status: 400,
+                headers: {
+                  "Content-Type": "application/xml",
+                  "x-amz-request-id": this.ctx.id.toString(),
+                }
+              });
+            }
+            
+            try {
+              const multipartUpload = bucketToUse.resumeMultipartUpload(pathWithoutLeadingSlash, uploadId);
+              const uploadedPart = await multipartUpload.uploadPart(partNumber, request.body as any);
+              
+              console.error(`Part ${partNumber} uploaded successfully, etag: ${uploadedPart.etag}`);
+              
+              return new Response(null, {
+                status: 200,
+                headers: {
+                  "ETag": `"${uploadedPart.etag}"`,
+                  "x-amz-request-id": this.ctx.id.toString(),
+                }
+              });
+            } catch (error: any) {
+              console.error(`Failed to upload part ${partNumber}:`, error);
+              return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+    <Code>InternalError</Code>
+    <Message>Failed to upload part: ${String(error)}</Message>
+    <RequestId>${this.ctx.id.toString()}</RequestId>
+    <HostId>${this.ctx.id.toString()}</HostId>
+</Error>`, {
+                status: 500,
+                headers: {
+                  "Content-Type": "application/xml",
+                  "x-amz-request-id": this.ctx.id.toString(),
+                }
+              });
+            }
+          }
+          
+          // Standard single-part PUT
+          // Extract MD5 from Content-MD5 header if provided
+          const md5Header = request.headers.get("Content-MD5");
+          const contentLengthHeader = request.headers.get("Content-Length");
+          const contentLength = contentLengthHeader ? parseInt(contentLengthHeader) : 0;
+          
+          // Use multipart upload for files larger than 50MB
+          const MULTIPART_THRESHOLD = 50 * 1024 * 1024; // 50MB
+          
+          if (contentLength > MULTIPART_THRESHOLD) {
+            console.error(`Large upload detected (${(contentLength / (1024 * 1024)).toFixed(2)} MB), using multipart upload`);
+            return await this.handleLargeUpload(
+              bucketToUse,
+              pathWithoutLeadingSlash,
+              request.body,
+              contentLength,
+              md5Header
+            );
+          }
+          
+          // Standard upload for smaller files
+          const putOptions: any = {};
+          
+          if (md5Header) {
+            putOptions.customMetadata = { md5: md5Header };
+          }
+          
+          const obj = await bucketToUse.put(
+            pathWithoutLeadingSlash, 
+            request.body as unknown as ArrayBuffer,
+            putOptions
+          );
           if (!obj) return new Response("Not found", { status: 404 });
           return new Response(null, {
             status: 204,
@@ -1303,8 +1793,48 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
           });
         }
         case "DELETE": {
+          // AWS S3 AbortMultipartUpload: DELETE /key?uploadId=ID
+          const uploadId = url.searchParams.get("uploadId");
+          
+          if (uploadId) {
+            // Abort a multipart upload
+            console.error(`Aborting multipart upload ${uploadId} for ${pathWithoutLeadingSlash}`);
+            
+            try {
+              const multipartUpload = bucketToUse.resumeMultipartUpload(pathWithoutLeadingSlash, uploadId);
+              await multipartUpload.abort();
+              
+              console.error(`Multipart upload ${uploadId} aborted successfully`);
+              
+              // S3 returns 204 No Content on successful abort
+              return new Response(null, { 
+                status: 204,
+                headers: {
+                  "x-amz-request-id": this.ctx.id.toString(),
+                }
+              });
+            } catch (error: any) {
+              console.error(`Failed to abort multipart upload ${uploadId}:`, error);
+              return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+    <Code>NoSuchUpload</Code>
+    <Message>The specified upload does not exist. The upload ID may be invalid, or the upload may have been aborted or completed.</Message>
+    <UploadId>${uploadId}</UploadId>
+    <RequestId>${this.ctx.id.toString()}</RequestId>
+    <HostId>${this.ctx.id.toString()}</HostId>
+</Error>`, {
+                status: 404,
+                headers: {
+                  "Content-Type": "application/xml",
+                  "x-amz-request-id": this.ctx.id.toString(),
+                }
+              });
+            }
+          }
+          
+          // Standard DELETE for object
           // Check if object exists first (optional, but allows for proper error messages)
-          const exists = await this.env.R2_BUCKET.head(pathWithoutLeadingSlash);
+          const exists = await bucketToUse.head(pathWithoutLeadingSlash);
           if (!exists) {
             // AWS S3 is idempotent - returns 204 even if object doesn't exist
             return new Response(null, { 
@@ -1316,7 +1846,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
           }
           
           // Delete the object
-          await this.env.R2_BUCKET.delete(pathWithoutLeadingSlash);
+          await bucketToUse.delete(pathWithoutLeadingSlash);
           
           // S3 returns 204 No Content on successful deletion
           return new Response(null, { 
@@ -1328,6 +1858,109 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
         }
         default:
           return new Response("Method not allowed", { status: 405 });
+      }
+    }
+
+    /**
+     * Handle large file uploads using R2 multipart upload API
+     * Transparently chunks the upload into parts for better reliability
+     */
+    private async handleLargeUpload(
+      bucket: any,
+      key: string,
+      body: ReadableStream | null,
+      contentLength: number,
+      md5Header: string | null
+    ): Promise<Response> {
+      if (!body) {
+        return new Response("Missing request body", { status: 400 });
+      }
+
+      try {
+        // Create multipart upload
+        console.error(`Creating multipart upload for ${key}`);
+        const multipartUpload = await bucket.createMultipartUpload(key, {
+          customMetadata: md5Header ? { md5: md5Header } : undefined,
+        });
+        
+        console.error(`Multipart upload created with uploadId: ${multipartUpload.uploadId}`);
+
+        // Part size: 10MB (5MB is minimum, using 10MB as recommended)
+        const PART_SIZE = 10 * 1024 * 1024;
+        const uploadedParts: R2UploadedPart[] = [];
+        
+        // Read body stream and upload in chunks
+        const reader = body.getReader();
+        let partNumber = 1;
+        let buffer = new Uint8Array(0);
+        let totalUploaded = 0;
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            
+            // Append new data to buffer
+            if (value) {
+              const newBuffer = new Uint8Array(buffer.length + value.length);
+              newBuffer.set(buffer);
+              newBuffer.set(value, buffer.length);
+              buffer = newBuffer;
+            }
+
+            // Upload part if we have enough data or this is the last part
+            const shouldUpload = buffer.length >= PART_SIZE || (done && buffer.length > 0);
+            
+            if (shouldUpload) {
+              const partData = buffer;
+              console.error(`Uploading part ${partNumber} (${(partData.length / (1024 * 1024)).toFixed(2)} MB)`);
+              
+              const uploadedPart = await multipartUpload.uploadPart(partNumber, partData);
+              uploadedParts.push(uploadedPart);
+              
+              totalUploaded += partData.length;
+              console.error(`Part ${partNumber} uploaded successfully. Total: ${(totalUploaded / (1024 * 1024)).toFixed(2)} MB / ${(contentLength / (1024 * 1024)).toFixed(2)} MB`);
+              
+              partNumber++;
+              buffer = new Uint8Array(0);
+            }
+
+            if (done) break;
+          }
+
+          // Complete the multipart upload
+          console.error(`Completing multipart upload with ${uploadedParts.length} parts`);
+          const object = await multipartUpload.complete(uploadedParts);
+          
+          console.error(`Multipart upload completed successfully: ${key}`);
+          
+          return new Response(null, {
+            status: 204,
+            headers: {
+              "ETag": `"${object.etag}"`,
+              "x-amz-request-id": this.ctx.id.toString(),
+            },
+          });
+
+        } catch (error) {
+          // If upload fails, abort the multipart upload to clean up
+          console.error("Multipart upload failed, aborting:", error);
+          try {
+            await multipartUpload.abort();
+            console.error("Multipart upload aborted");
+          } catch (abortError) {
+            console.error("Failed to abort multipart upload:", abortError);
+          }
+          throw error;
+        } finally {
+          reader.releaseLock();
+        }
+
+      } catch (error: any) {
+        console.error("Failed to handle large upload:", error);
+        return new Response(
+          `Multipart upload failed: ${error.message}`,
+          { status: 500 }
+        );
       }
     }
 
@@ -1513,9 +2146,6 @@ class HTTPProxyControl {
       // Connect data channels
       await this.connectDataChannels();
       console.error("HTTP Proxy data channels connected");
-      
-
-      console.error("HTTP Proxy control and data channels connected");
     } catch (error) {
       console.error("Failed to connect HTTP Proxy:", error);
       // Signal disconnection on error
@@ -1672,7 +2302,7 @@ class HTTPProxyControl {
   }
 
   private parseControlMessage(data: Buffer): ControlMessage | null {
-    console.error("Parsing control message:", data);
+    //console.debug("Parsing control message:", data);
     try {
       if (data.length < 4) return null;
       
@@ -1681,7 +2311,7 @@ class HTTPProxyControl {
       
       const jsonData = data.slice(4, 4 + length);
       const jsonText = jsonData.toString('utf-8');
-      console.error("Parsed control message:", jsonText);
+      //console.debug("Parsed control message:", jsonText);
       return JSON.parse(jsonText) as ControlMessage;
     } catch (error) {
       console.error("Failed to parse control message:", error);
@@ -1691,7 +2321,6 @@ class HTTPProxyControl {
 
   private async handleControlMessage(message: ControlMessage) {
     console.error("Received control message:", message);
-    
     switch (message.type) {
       case "allocate_channel":
         await this.handleChannelAllocation(message.requestId, message.port);
@@ -1824,7 +2453,7 @@ class HTTPProxyControl {
   }
 
   private async readHTTPRequest(channel: DataChannelState): Promise<Request> {
-    console.error("Reading HTTP request from data channel:", channel.port);
+    //console.debug("Reading HTTP request from data channel:", channel.port);
     if (!channel.reader) {
       console.error("Channel reader not available");
       throw new Error("Channel reader not available");
@@ -2012,53 +2641,62 @@ class HTTPProxyControl {
   }
 
   private async sendHTTPResponse(channel: DataChannelState, response: Response) {
-    console.debug("Sending HTTP response:", response);
     if (!channel.writer) {
       throw new Error("Channel writer not available");
     }
 
-    // Send status line
+    // Status line
     const statusLine = `HTTP/1.1 ${response.status} ${response.statusText}\r\n`;
     await channel.writer.write(new TextEncoder().encode(statusLine));
-    console.error("Sent status line", statusLine);
 
-    // Send headers
+    // Headers
     let hasContentLength = false;
+    let hasTransferEncodingChunked = false;
     for (const [key, value] of (response as unknown as CloudflareResponse).headers.entries()) {
       const headerLine = `${key}: ${value}\r\n`;
       await channel.writer.write(new TextEncoder().encode(headerLine));
-      if (key.toLowerCase() === 'content-length') {
-        hasContentLength = true;
-      }
+      const lower = key.toLowerCase();
+      if (lower === 'content-length') hasContentLength = true;
+      if (lower === 'transfer-encoding' && value.toLowerCase().includes('chunked')) hasTransferEncodingChunked = true;
     }
-    // If response has no body and no Content-Length header, add Content-Length: 0
-    // This is critical for keep-alive connections to know when response is complete
+
+    // If no body and no content-length, explicitly write zero content length
     if (!response.body && !hasContentLength) {
-      const headerLine = `Content-Length: 0\r\n`;
-      await channel.writer.write(new TextEncoder().encode(headerLine));
+      await channel.writer.write(new TextEncoder().encode(`Content-Length: 0\r\n`));
     }
-    console.debug("Sent headers");
+
+    // Decide whether to use chunked encoding for body
+    let useChunkedEncoding = false;
+    if (response.body && !hasContentLength && !hasTransferEncodingChunked) {
+      await channel.writer.write(new TextEncoder().encode(`Transfer-Encoding: chunked\r\n`));
+      useChunkedEncoding = true;
+    }
 
     // End headers
     await channel.writer.write(new TextEncoder().encode('\r\n'));
-    console.debug("Sent end headers");
 
-    // Send body
+    // Body
     if (response.body) {
-      console.debug("Sending body");
       const reader = response.body.getReader();
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          await channel.writer.write(value);
+          if (useChunkedEncoding) {
+            await channel.writer.write(new TextEncoder().encode(value.length.toString(16) + "\r\n"));
+            await channel.writer.write(value);
+            await channel.writer.write(new TextEncoder().encode("\r\n"));
+          } else {
+            await channel.writer.write(value);
+          }
+        }
+        if (useChunkedEncoding) {
+          await channel.writer.write(new TextEncoder().encode("0\r\n\r\n"));
         }
       } finally {
         reader.releaseLock();
       }
     }
-
-    console.debug(`Sent HTTP response for data channel ${channel.port}`);
   }
 
   private async sendErrorResponse(channel: DataChannelState, error: string) {
@@ -2093,7 +2731,7 @@ class HTTPProxyControl {
       
       channel.inUse = false;
       
-      console.error(`Data channel ${channel.port} closed`);
+      //console.debug(`Data channel ${channel.port} closed`);
     } catch (error) {
       console.error(`Error closing data channel ${channel.port}:`, error);
     }
@@ -2185,44 +2823,51 @@ class HTTPProxyControl {
       console.error("Control heartbeat watchdog already running, stopping");
       return;
     };
-    this.heartbeatWatchdogInterval = new Promise<void>(async (resolve) => {
+    let thisPromise = new Promise<void>(async (resolve) => {
+      const startedAt = Date.now();
       let lastNow = Date.now();
       try{
         while(true) {
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          if(this.heartbeatWatchdogInterval !== thisPromise) {
+            console.error("Heartbeat watchdog interval changed, stopping");
+            return;
+          }
           const status = await this.stateProvider();
           if(status !== 'running') {
             console.error("Container not running, stopping control heartbeat watchdog");
             return;
           }
-          // Initialize to now to allow initial heartbeat delay
-          this.lastHeartbeatAt = Date.now();
-          console.error("Running control heartbeat watchdog (5s timeout)");
+
+          console.error("Running control heartbeat watchdog");
           try {
             const now = Date.now();
             console.error(`Heartbeat watchdog check ${now - lastNow}ms ${now}, ${lastNow}, ${this.lastHeartbeatAt}`);
             const elapsed = now - this.lastHeartbeatAt;
+            const timeSinceStarted = now - startedAt;
             lastNow = now;
-            if (elapsed > 20000) {
+            if (elapsed > 20000 && timeSinceStarted > 10000) {
               console.error("No control heartbeat for", elapsed, "ms; closing control channel to trigger reconnect");
               // Force close only the control channel; reconnect loop will re-establish
               await this.forceCloseControlChannel();
+
             }
           } catch (e) {
             console.error("Heartbeat watchdog error:", e);
           }
-          await new Promise(resolve => setTimeout(resolve, 5000));
         }
       } finally {
+        console.error("Heartbeat watchdog exiting");
         this.heartbeatWatchdogInterval = null;
         resolve();
       }
     });
-
+    this.heartbeatWatchdogInterval = thisPromise;
+    return thisPromise;
   }
 
   private stopHeartbeatWatchdog() {
     if (this.heartbeatWatchdogInterval !== null) {
-      clearInterval(this.heartbeatWatchdogInterval as unknown as number);
       this.heartbeatWatchdogInterval = null;
       console.error("Stopped control heartbeat watchdog");
     }
@@ -2231,16 +2876,28 @@ class HTTPProxyControl {
   private async forceCloseControlChannel() {
     try {
       if (this.controlReader) {
-        await this.controlReader.cancel();
-        this.controlReader.releaseLock();
+        try {
+          await this.controlReader.cancel();
+          this.controlReader.releaseLock();
+        } catch (e) {
+          console.error("Error while canceling control reader:", e);
+        }
         this.controlReader = null;
       }
       if (this.controlWriter) {
-        await this.controlWriter.close();
+        try {
+          await this.controlWriter.close();
+        } catch (e) {
+          console.error("Error while closing control writer:", e);
+        }
         this.controlWriter = null;
       }
       if (this.controlSocket) {
-        await this.controlSocket.close();
+        try {
+          await this.controlSocket.close();
+        } catch (e) {
+          console.error("Error while closing control socket:", e);
+        }
         this.controlSocket = null;
       }
     } catch (e) {
