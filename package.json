@@ -4,7 +4,7 @@
   "description": "Alchemy Typescript Project",
   "type": "module",
   "scripts": {
-    "build": "bun build:worker",
+    "build": "./container_src/build-proxy.sh && bun build:worker",
     "build:worker": "tsc -b",
     "configure": "alchemy configure",
     "version": "alchemy --version",
