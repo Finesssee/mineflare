@@ -1594,29 +1594,47 @@ class HTTPProxyControl {
   }
 
   private async handleDataChannel(channel: DataChannelState) {
-    try {
-      // Read HTTP request from the data channel
-      const request = await this.readHTTPRequest(channel);
-      
-      // Make the actual fetch request to the internet
-      console.error(`Proxying ${request.method} ${request.url}`);
-      const response = await this.fetchImplementation(request);
-      
-      // Send HTTP response back to the data channel
-      await this.sendHTTPResponse(channel, response);
-      
-    } catch (error) {
-      console.error(`Error handling data channel ${channel.port}:`, error);
-      // Send error response
+    // Keep-alive loop: handle multiple requests on the same channel
+    while (channel.socket && channel.reader && channel.writer) {
       try {
-        await this.sendErrorResponse(channel, String(error));
-      } catch (e) {
-        console.error("Failed to send error response:", e);
+        // Read HTTP request from the data channel
+        const request = await this.readHTTPRequest(channel);
+        
+        // Make the actual fetch request
+        console.error(`Proxying ${request.method} ${request.url}`);
+        const response = await this.fetchImplementation(request);
+        
+        // Send HTTP response back to the data channel
+        await this.sendHTTPResponse(channel, response);
+        
+        // Successfully completed request - loop to handle next one
+        console.error(`Data channel ${channel.port} ready for next request`);
+        
+      } catch (error) {
+        console.error(`Error handling data channel ${channel.port}:`, error);
+        
+        // Check if it's a socket closure (normal end of keep-alive)
+        const errorMessage = String(error);
+        if (errorMessage.includes("closed") || errorMessage.includes("EOF") || errorMessage.includes("done")) {
+          console.error(`Data channel ${channel.port} closed gracefully, exiting loop`);
+          break;
+        }
+        
+        // Try to send error response
+        try {
+          await this.sendErrorResponse(channel, errorMessage);
+        } catch (e) {
+          console.error("Failed to send error response:", e);
+          break; // Exit loop if we can't send error
+        }
+        
+        // On error, close the channel and exit loop
+        break;
       }
-    } finally {
-      // Close the data channel
-      await this.closeDataChannel(channel);
     }
+    
+    // Clean up when exiting loop
+    await this.closeDataChannel(channel);
   }
 
   private async readHTTPRequest(channel: DataChannelState): Promise<Request> {
@@ -1640,6 +1658,10 @@ class HTTPProxyControl {
       const { done, value } = await channel.reader.read();
       
       if (done) {
+        // Stream closed - if we haven't parsed headers yet, this is an error
+        if (!headersParsed) {
+          throw new Error("Connection closed before receiving complete request");
+        }
         break;
       }
 
@@ -1823,8 +1845,9 @@ class HTTPProxyControl {
         hasContentLength = true;
       }
     }
-    // If the response should not have a body (204/304/1xx) and no Content-Length was set, add Content-Length: 0
-    if ((response.status === 204 || response.status === 304 || (response.status >= 100 && response.status < 200)) && !hasContentLength) {
+    // If response has no body and no Content-Length header, add Content-Length: 0
+    // This is critical for keep-alive connections to know when response is complete
+    if (!response.body && !hasContentLength) {
       const headerLine = `Content-Length: 0\r\n`;
       await channel.writer.write(new TextEncoder().encode(headerLine));
     }

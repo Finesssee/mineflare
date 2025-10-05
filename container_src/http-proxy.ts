@@ -167,18 +167,20 @@ class HTTPProxyServer {
           close: (socket) => {
             const port = this.findPortBySocket(socket);
             if (port) {
-              console.log(`[Data:${port}] Connection closed`);
+              console.log(`[Data:${port}] Connection closed by container.ts`);
               const channel = this.dataChannels.get(port);
               if (channel) {
                 // Invoke close handler first (for response finalization)
                 channel.handler.onClose();
                 
-                // Then clean up channel state
+                // Then clean up channel state - socket is gone
                 channel.currentSocket = null;
                 channel.inUse = false;
                 channel.handler.onData = this.defaultDataChannelHandler;
                 channel.handler.onClose = this.defaultDataChannelCloseHandler;
-                this.sendControlMessage({ type: "channel_released", port });
+                
+                // Don't send channel_released - container.ts closed it, not us
+                // It will reconnect on next allocation
               }
             }
           },
@@ -228,12 +230,17 @@ class HTTPProxyServer {
       const port = await this.allocateDataChannel(requestId);
       console.log(`[HTTP] ${requestId} allocated data channel on port ${port}`);
       
-      // Wait briefly for container.ts to connect to the data channel
-      await this.waitForDataChannelConnection(port, 5000);
-      
       const channel = this.dataChannels.get(port);
-      if (!channel || !channel.currentSocket) {
-        throw new Error(`Data channel ${port} not ready`);
+      if (!channel) {
+        throw new Error(`Data channel ${port} not found`);
+      }
+      
+      // Only wait for connection if socket isn't already there (new connections)
+      if (!channel.currentSocket) {
+        await this.waitForDataChannelConnection(port, 5000);
+        if (!channel.currentSocket) {
+          throw new Error(`Data channel ${port} not ready`);
+        }
       }
       
       let sendPromise: Promise<void> | null = null;
@@ -279,7 +286,7 @@ class HTTPProxyServer {
 
   private async allocateDataChannel(requestId: string): Promise<number> {
     return new Promise((resolve, reject) => {
-      // Find an available data channel
+      // Find an available data channel (not in use, may or may not have a socket)
       const availableChannel = Array.from(this.dataChannels.values()).find(ch => !ch.inUse);
       
       if (!availableChannel) {
@@ -290,7 +297,15 @@ class HTTPProxyServer {
       // Mark as in use
       availableChannel.inUse = true;
       
-      // Send allocation request to control channel with the port we selected
+      // If channel already has a socket (keep-alive reuse), resolve immediately
+      if (availableChannel.currentSocket) {
+        console.log(`[HTTP] ${requestId} reusing existing connection on port ${availableChannel.port}`);
+        resolve(availableChannel.port);
+        return;
+      }
+      
+      // No socket yet - need to request container.ts to connect
+      console.log(`[HTTP] ${requestId} requesting new connection on port ${availableChannel.port}`);
       this.pendingAllocations.set(requestId, resolve);
       this.sendControlMessage({
         type: "allocate_channel",
@@ -450,13 +465,17 @@ class HTTPProxyServer {
       let bodyReceived = 0;
       let responseComplete = false;
 
-      // Cleanup function to reset handlers
+      // Cleanup function to reset handlers and mark channel available
       const cleanup = () => {
         if (responseComplete) return;
         responseComplete = true;
         clearTimeout(timeout);
         channel.handler.onData = this.defaultDataChannelHandler;
         channel.handler.onClose = this.defaultDataChannelCloseHandler;
+        
+        // Mark channel as available for reuse (keep socket open!)
+        channel.inUse = false;
+        console.log(`[Data:${channel.port}] Channel marked available for reuse`);
       };
 
       // Timeout if no response received
