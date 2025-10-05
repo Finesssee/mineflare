@@ -1,8 +1,21 @@
 import { Container, ContainerOptions } from "@cloudflare/containers";
 import { worker } from "../alchemy.run";
 import { DurableObject } from 'cloudflare:workers';
+import type { Response as CloudflareResponse } from '@cloudflare/workers-types'
 import { Rcon } from "./lib/rcon";
 import { array, string } from "zod";
+
+
+interface CloudflareTCPSocket {
+  get readable(): ReadableStream;
+  get writable(): WritableStream;
+  get closed(): Promise<void>;
+  get opened(): Promise<SocketInfo>;
+  get upgraded(): boolean;
+  get secureTransport(): "on" | "off" | "starttls";
+  close(): Promise<void>;
+  startTls(options?: TlsOptions): Socket;
+}
 
 const StringArraySchema = array(string());
 const DYNMAP_PLUGIN_FILENAME = 'Dynmap-3.7-beta-11-spigot';
@@ -46,18 +59,12 @@ const PLUGIN_SPECS = [
   },
 ] as const;
 
-export class MinecraftContainer extends Container<{
-  TS_AUTHKEY: string;
-  R2_ACCESS_KEY_ID: string;
-  R2_SECRET_ACCESS_KEY: string;
-  R2_ENDPOINT: string;
-  R2_BUCKET_NAME: string;
-}> {
+export class MinecraftContainer extends Container<typeof worker.Env> {
 
     private lastRconSuccess: Date | null = null;
     private _isPasswordSet: boolean = false;
     // Port the container listens on (default: 8080)
-    defaultPort = 8080;
+    defaultPort = 8081;
     // Time before container sleeps due to inactivity (default: 30s)
     sleepAfter = "20m";
     
@@ -66,7 +73,7 @@ export class MinecraftContainer extends Container<{
         TS_EXTRA_ARGS: "--advertise-exit-node",
         TS_ENABLE_HEALTH_CHECK: "true",
         TS_LOCAL_ADDR_PORT: "0.0.0.0:8080",
-        TS_AUTHKEY: this.env.TS_AUTHKEY,
+        ...(this.env.TS_AUTHKEY && this.env.TS_AUTHKEY !== "null" ? {TS_AUTHKEY: this.env.TS_AUTHKEY} : {}),
         // Minecraft server configuration
         TYPE: "PAPER",
         EULA: "TRUE",
@@ -76,12 +83,14 @@ export class MinecraftContainer extends Container<{
         // Hardcoded password is safe since we're running on a private tailnet
         RCON_PASSWORD: "minecraft",
         RCON_PORT: "25575",
-        INIT_MEMORY: "2G",
-        MAX_MEMORY: "4G",
+        INIT_MEMORY: "5G", // big containers
+        MAX_MEMORY: "11G", // big containers
         // R2 credentials for Dynmap S3 storage
-        AWS_ACCESS_KEY_ID: this.env.R2_ACCESS_KEY_ID,
-        AWS_SECRET_ACCESS_KEY: this.env.R2_SECRET_ACCESS_KEY,
-        AWS_ENDPOINT_URL: this.env.R2_ENDPOINT,
+        // AWS_ACCESS_KEY_ID: this.env.R2_ACCESS_KEY_ID,
+        // AWS_SECRET_ACCESS_KEY: this.env.R2_SECRET_ACCESS_KEY,
+        // Random but properly formatted
+        AWS_ACCESS_KEY_ID: "AKIAFAKEFAKEFAKE1234",
+        AWS_SECRET_ACCESS_KEY: "RaNd0mFaKeS3cr3tK3yTh4t1s40Ch4r4ct3rsL0ng",
         DYNMAP_BUCKET: this.env.R2_BUCKET_NAME,
         OPTIONAL_PLUGINS: this.pluginFilenamesToEnable.join(" "), // space separated for consumption by bash script start-with-services.sh
     };
@@ -131,6 +140,19 @@ export class MinecraftContainer extends Container<{
         } catch (_) {
           this._isPasswordSet = false;
         }
+        this.ctx.waitUntil(this.getStatus().then(async status => {
+          if(status !== 'stopped' && status !== 'stopping') {
+            console.error("Container is not stopped or stopping, initializing HTTP Proxy in constructor");
+            try {
+              // In dev sometimes state lies
+              await this.start();
+              await this.initHTTPProxy();
+            } catch (error) {
+              this.stop()
+              console.error("Failed to start container in constructor:", error);
+            }
+          }
+        }));
     }
 
     // Public async method for RPC
@@ -169,7 +191,7 @@ export class MinecraftContainer extends Container<{
         SET json_data = jsonb_patch(json_data, jsonb(?))
         WHERE id = 1
       `, JSON.stringify({ optionalPlugins: this.pluginFilenamesToEnable })).rowsWritten;
-      console.log(result);
+      console.error(result);
     }
 
     // Get configured environment variables for a specific plugin
@@ -235,8 +257,21 @@ export class MinecraftContainer extends Container<{
     // RCON connection instance
     private rcon: Promise<Rcon> | null = null;
 
+    // HTTP Proxy connection instances
+    private httpProxyControl: HTTPProxyControl | null = null;
+    private httpProxyLoopPromise: Promise<void> | null = null;
+    private httpProxyLoopShouldStop: boolean = false;
+
+    private stopping = false;
+    override async stop() {
+      console.error("stopppppp");
+      this.stopping = true;
+      await super.stop("SIGTERM");
+    }
+
     // Optional lifecycle hooks
     override async start() {
+      this.stopping = false
       console.error("start");
       this._initializeSql();
       const newOptionalPlugins = this.pluginFilenamesToEnable.join(" ");
@@ -244,6 +279,7 @@ export class MinecraftContainer extends Container<{
         this.envVars.OPTIONAL_PLUGINS = this.pluginFilenamesToEnable.join(" ");
       }
       
+      console.error("Getting all configured plugin env");
       // Inject configured plugin environment variables (only mutate envVars here!)
       const allPluginEnv = this.getAllConfiguredPluginEnv();
       console.error("allPluginEnv", allPluginEnv);
@@ -259,25 +295,47 @@ export class MinecraftContainer extends Container<{
         }
       }
 
+      console.error("Getting status");
       if(await this.getStatus() !== 'stopped') {
         // wait up to 3 mins for the server to start
+        console.error("Waiting for server to start");
+        const deadline = Date.now() + 3 * 60 * 1000;
         while(await this.getStatus() !== 'running') {
           await new Promise(resolve => setTimeout(resolve, 250));
+          if(Date.now() > deadline) {
+            throw new Error("Server did not start in time");
+          }
         }
         if(await this.getStatus() !== 'running') {
           throw new Error("Server did not start in time");
         }
       }
-      
-      return super.startAndWaitForPorts(8080, {
-          waitInterval: 250,
-          instanceGetTimeoutMS: 2000,
-          portReadyTimeoutMS: 300000
-      });
+      try {
+        console.error("Starting and waiting for ports");
+        await super.startAndWaitForPorts(8083, {
+            waitInterval: 250,
+            instanceGetTimeoutMS: 2000,
+            portReadyTimeoutMS: 300000
+        });
+      } catch (error) {
+        console.error("Error while starting ports but it's probably OK", error);
+        const deadline = Date.now() + 5000;
+        while(await this.getStatus() !== 'running') {
+          await new Promise(resolve => setTimeout(resolve, 250));
+          if(Date.now() > deadline) {
+            throw new Error("Server did not start in time");
+          }
+        }
+        if(await this.getStatus() !== 'running') {
+          throw error;
+        }
+      }
+      this.ctx.waitUntil(this.initHTTPProxy());
+      console.error("Ports started");
     }
 
     override onStart() {
-      console.log("Container successfully started");
+      console.error("Container successfully started");
       this.ctx.waitUntil(this.initRcon().then(rcon => rcon?.send("dynmap fullrender world")));
     }
   
@@ -320,7 +378,7 @@ export class MinecraftContainer extends Container<{
   // Async because it's easier to consume as RPC if fn is async
   public async setupPassword({ password }: { password: string }): Promise<{ created: boolean; symKey?: string }>{
     const run = async () => {
-      console.log("setupPassword: Starting, isPasswordSet =", this._isPasswordSet);
+      console.error("setupPassword: Starting, isPasswordSet =", this._isPasswordSet);
       
       // Pre-generate values outside of transaction
       const salt = this.generateRandomBytes(16);
@@ -329,43 +387,43 @@ export class MinecraftContainer extends Container<{
       const symKeyB64 = this.base64urlEncode(symKeyBytes);
       const hash = await this.derivePasswordHash(password, saltB64);
 
-      console.log("setupPassword: Pre-generated values ready, entering transaction");
+      console.error("setupPassword: Pre-generated values ready, entering transaction");
       
       // Use Cloudflare's transactionSync API for atomic operations
       const result = this.ctx.storage.transactionSync(() => {
         const checkResult = this._sql.exec('SELECT 1 as ok FROM auth LIMIT 1;');
-        console.log("setupPassword: Transaction check, rowsRead =", checkResult.rowsRead);
+        console.error("setupPassword: Transaction check, rowsRead =", checkResult.rowsRead);
         try {
           if(checkResult.one().ok) {
-            console.log("setupPassword: Password already exists, aborting");
+            console.error("setupPassword: Password already exists, aborting");
             return { created: false } as const;
           }
         } catch (_) {
           // Password doesn't exist
         }
 
-        console.log("setupPassword: No existing password, inserting new auth record");
+        console.error("setupPassword: No existing password, inserting new auth record");
         const insertResult = this._sql.exec(
           'INSERT INTO auth (id, salt, password_hash, sym_key, created_at) VALUES (1, ?, ?, ?, ?);',
           saltB64, hash, symKeyB64, Date.now()
         );
-        console.log("setupPassword: Insert result, rowsWritten =", insertResult.rowsWritten);
+        console.error("setupPassword: Insert result, rowsWritten =", insertResult.rowsWritten);
 
         this._isPasswordSet = true;
         return { created: true, symKey: symKeyB64 } as const;
       });
       
-      console.log("setupPassword: Transaction complete, result =", result);
+      console.error("setupPassword: Transaction complete, result =", result);
       return result;
     };
 
     // Prefer blocking concurrency if available
     const anyCtx: any = this.ctx as any;
     if (anyCtx && typeof anyCtx.blockConcurrencyWhile === 'function') {
-      console.log("setupPassword: Using blockConcurrencyWhile");
+      console.error("setupPassword: Using blockConcurrencyWhile");
       return await anyCtx.blockConcurrencyWhile(run);
     }
-    console.log("setupPassword: No blockConcurrencyWhile, running directly");
+    console.error("setupPassword: No blockConcurrencyWhile, running directly");
     return await run();
   }
 
@@ -399,15 +457,23 @@ export class MinecraftContainer extends Container<{
     }
   }
 
-  private async getStatus(): Promise<'running' | 'stopping' | 'stopped' | 'starting'> {
-    const state = (await this.getState()).status;
-    if(state === 'stopped_with_code') {
+  public async getStatus(): Promise<'running' | 'stopping' | 'stopped' | 'starting'> {
+    const state = await this.getState();
+    console.error("getState", state);
+    const status = state.status;
+    if(status === 'stopped_with_code') {
+      this.stopping = false;
       return 'stopped';
-    } else if ( state === 'healthy') {
+    } else if ( status === 'healthy') {
+      if(this.stopping) {
+        return 'stopping';
+      }
       return 'running';
-    } else {
-      return state;
+    } else if (status === 'stopped') {
+      this.stopping = false;
+      return status;
     }
+    return status;
   }
 
   // Async because it's easier to consume as RPC if fn is async
@@ -449,33 +515,35 @@ export class MinecraftContainer extends Container<{
 
   // Debug helper - clear auth (dev only)
   public async clearAuth(): Promise<void> {
-    console.log("clearAuth: Clearing auth table");
+    console.error("clearAuth: Clearing auth table");
     this.ctx.storage.transactionSync(() => {
       this._sql.exec('DELETE FROM auth;');
       this._isPasswordSet = false;
     });
-    console.log("clearAuth: Complete, isPasswordSet =", this._isPasswordSet);
+    console.error("clearAuth: Complete, isPasswordSet =", this._isPasswordSet);
   }
 
     override onStop() {
-      console.log("Container successfully shut down");
+      console.error("Container successfully shut down");
       this.ctx.waitUntil(this.disconnectRcon());
+      this.ctx.waitUntil(this.disconnectHTTPProxy());
     }
   
     override onError(error: unknown) {
-      console.log("Container error:", error);
+      console.error("Container error:", error);
     }
-  
+
+    
     // Handle HTTP requests to this container
     override async fetch(request: Request): Promise<Response> {
       try {
         const url = new URL(request.url);
-        console.log("Fetching container", url.pathname);
+        console.error("Fetching container", url.pathname);
 
-        console.log("Optional plugins", this.pluginFilenamesToEnable);
+        console.error("Optional plugins", this.pluginFilenamesToEnable);
         
         if (url.protocol.startsWith('ws') || url.pathname.startsWith('/ws')) {
-          console.log('websocket')
+          console.error('websocket')
           // Creates two ends of a WebSocket connection.
           const webSocketPair = new WebSocketPair();
           const [client, server] = Object.values(webSocketPair);
@@ -483,7 +551,7 @@ export class MinecraftContainer extends Container<{
           // Calling `acceptWebSocket()` connects the WebSocket to the Durable Object, allowing the WebSocket to send and receive messages.
           // Unlike `ws.accept()`, `state.acceptWebSocket(ws)` allows the Durable Object to be hibernated
           // When the Durable Object receives a message during Hibernation, it will run the `constructor` to be re-initialized
-          console.log('accept websocket');
+          console.error('accept websocket');
           this.ctx.acceptWebSocket(server);
 
           return new Response(null, {
@@ -491,7 +559,7 @@ export class MinecraftContainer extends Container<{
             webSocket: client,
           });
         }
-        console.log('not websocket');
+        console.error('not websocket');
 
         // Handle RCON API requests
         if (url.pathname === "/rcon/status") {
@@ -530,11 +598,12 @@ export class MinecraftContainer extends Container<{
   
     // Initialize RCON connection
     private async initRcon(): Promise<Rcon | null> {
-      if((await this.getState()).status === 'stopped' || (await this.getState()).status === 'stopping') {
+      const status = await this.getStatus();
+      if(status === 'stopped' || status === 'stopping') {
         return null;
       }
       if(this.rcon) {
-        console.log("RCON already initialized, checking if it's still valid");
+        console.error("RCON already initialized, checking if it's still valid");
         
         // We need to check if the connection is still valid and working
         const client = await this.rcon;
@@ -556,12 +625,12 @@ export class MinecraftContainer extends Container<{
           throw new Error("Failed to get RCON port");
         }
         
-        console.log("Initializing RCON", Rcon);
+        console.error("Initializing RCON", Rcon);
         this.rcon = new Promise(async (resolve, reject) => {
           try {
             const rcon = new Rcon(port, "minecraft", () => this.getStatus());
             await rcon.connect();
-            console.log("RCON connected");
+            console.error("RCON connected");
             this.lastRconSuccess = new Date();
             resolve(rcon);
           } catch (error) {
@@ -586,7 +655,7 @@ export class MinecraftContainer extends Container<{
     }
   
     // Get server status via RCON
-    private async getRconStatus(): Promise<{ online: boolean; playerCount?: number; maxPlayers?: number }> {
+    public async getRconStatus(): Promise<{ online: boolean; playerCount?: number; maxPlayers?: number }> {
       if (!this.rcon) {
         if(!(await this.initRcon())) {
           return { online: false };
@@ -597,7 +666,7 @@ export class MinecraftContainer extends Container<{
 
       try {
         const listResponse = await this.rcon.then(rcon => rcon.send("list"));
-        console.log("Received response from RCON", listResponse);
+        console.error("Received response from RCON", listResponse);
         
         // Parse response like "There are 3 of a max of 20 players online"
         const match = listResponse.match(/There are (\d+) of a max of (\d+) players online/);
@@ -626,7 +695,7 @@ export class MinecraftContainer extends Container<{
 
       try {
         const listResponse = await this.rcon!.then(rcon => rcon.send("list"));
-        console.log("Received player list response from RCON", listResponse);
+        console.error("Received player list response from RCON", listResponse);
         
         // Parse player list from response
         const playerMatch = listResponse.match(/online: (.+)$/);
@@ -666,7 +735,6 @@ export class MinecraftContainer extends Container<{
       try {
         // Get version info via RCON. Handle weird / thing in vanilla MC
         const versionResponse = await this.rcon!.then(rcon => rcon.send("version")).then(r => r.split('/').join('\n/').trim());
-        console.log("Received version response from RCON", versionResponse);
         
         const info: any = {
           motd: "Minecraft Server"
@@ -692,7 +760,7 @@ export class MinecraftContainer extends Container<{
             info.versionId = baseVersionMatch[1];
           }
           
-          console.log("Parsed Paper server version:", info);
+          console.error("Parsed Paper server version:", info);
         } else {
           // Parse default Minecraft format
           // Format: "Server version info:id = 1.21.9name = 1.21.9data = 4554..."
@@ -724,7 +792,7 @@ export class MinecraftContainer extends Container<{
           // Set the main version field to the version name
           info.version = info.versionName || "Unknown";
           
-          console.log("Parsed default Minecraft server version:", info);
+          console.error("Parsed default Minecraft server version:", info);
         }
         
         return info;
@@ -851,4 +919,1077 @@ export class MinecraftContainer extends Container<{
       // If the client closes the connection, the runtime will invoke the webSocketClose() handler.
       ws.close(code, "Durable Object is closing WebSocket");
     }
+
+    async fetchFromR2(request: Request): Promise<Response> {
+      const url = new URL(request.url);
+      
+      // Strip bucket name from path if using path-style URLs
+      // Path-style: /bucket-name/path/to/object
+      // Virtual-hosted: /path/to/object (bucket name in hostname)
+      let pathname = url.pathname;
+      const bucketName = this.env.R2_BUCKET_NAME;
+      console.error("Fetching from R2", url.pathname, bucketName);
+      if (bucketName && pathname.startsWith(`/${bucketName}`)) {
+        // Strip the bucket name prefix
+        pathname = pathname.slice(bucketName.length + 1); // +1 for the leading slash
+        if(pathname === "") {
+          pathname = "/";
+        }
+      } else if (bucketName && pathname === `/${bucketName}`) {
+        // Handle case where path is exactly /bucket-name (list operation)
+        pathname = "/";
+      }
+      
+      if(pathname === "/") {
+        // it's a list request get the query params
+        // prefix - Filter objects by prefix
+        // delimiter - Group keys (typically /)
+        // max-keys - Maximum number of keys to return
+        // continuation-token - For pagination (ListObjectsV2)
+        const prefix = url.searchParams.get("prefix") ?? "";
+        const delimiter = url.searchParams.get("delimiter") ?? "";
+        const maxKeys = parseInt(url.searchParams.get("max-keys") ?? "1000");
+        const continuationToken = url.searchParams.get("continuation-token");
+        
+        const list = await this.env.R2_BUCKET.list({
+          prefix: prefix,
+          delimiter: delimiter,
+          limit: maxKeys,
+          ...(continuationToken ? { cursor: continuationToken } : {}),
+        });
+        
+        // Build AWS S3-compatible XML response
+        const escapeXml = (str: string) => {
+          return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
+        };
+        
+        let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+        xml += '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">\n';
+        xml += `  <Name>r2-bucket</Name>\n`;
+        xml += `  <Prefix>${escapeXml(prefix)}</Prefix>\n`;
+        xml += `  <KeyCount>${list.objects.length}</KeyCount>\n`;
+        xml += `  <MaxKeys>${maxKeys}</MaxKeys>\n`;
+        xml += `  <IsTruncated>${list.truncated}</IsTruncated>\n`;
+        
+        if (delimiter) {
+          xml += `  <Delimiter>${escapeXml(delimiter)}</Delimiter>\n`;
+        }
+        
+        if (list.truncated && list.cursor) {
+          xml += `  <NextContinuationToken>${escapeXml(list.cursor)}</NextContinuationToken>\n`;
+        }
+        
+        // Add Contents for each object
+        for (const obj of list.objects) {
+          xml += '  <Contents>\n';
+          xml += `    <Key>${escapeXml(obj.key)}</Key>\n`;
+          xml += `    <LastModified>${obj.uploaded.toISOString()}</LastModified>\n`;
+          xml += `    <ETag>&quot;${escapeXml(obj.etag)}&quot;</ETag>\n`;
+          xml += `    <Size>${obj.size}</Size>\n`;
+          xml += `    <StorageClass>${escapeXml(obj.storageClass || 'STANDARD')}</StorageClass>\n`;
+          xml += '  </Contents>\n';
+        }
+        
+        // Add CommonPrefixes (for directory-like listings when using delimiter)
+        if (list.delimitedPrefixes && list.delimitedPrefixes.length > 0) {
+          for (const commonPrefix of list.delimitedPrefixes) {
+            xml += '  <CommonPrefixes>\n';
+            xml += `    <Prefix>${escapeXml(commonPrefix)}</Prefix>\n`;
+            xml += '  </CommonPrefixes>\n';
+          }
+        }
+        
+        xml += '</ListBucketResult>';
+        
+        return new Response(xml, {
+          headers: { 
+            "Content-Type": "application/xml",
+            "Content-Length": xml.length.toString()
+          }
+        });
+      }
+      const pathWithoutLeadingSlash = pathname.startsWith('/') ? pathname.slice(1) : pathname;
+      switch(request.method) {
+        case "HEAD": {
+          const obj = await this.env.R2_BUCKET.head(pathWithoutLeadingSlash);
+          if (!obj) {
+            return new Response(null, { 
+              status: 404,
+              headers: {
+                "Content-Type": "application/xml",
+                "x-amz-request-id": this.ctx.id.toString(),
+              }
+            });
+          }
+          
+          // Handle conditional requests
+          const ifMatch = request.headers.get("If-Match");
+          const ifNoneMatch = request.headers.get("If-None-Match");
+          const objectETag = `"${obj.etag}"`;
+          
+          // If-Match: return 412 if ETag doesn't match
+          if (ifMatch && ifMatch !== "*" && ifMatch !== objectETag) {
+            return new Response(null, {
+              status: 412, // Precondition Failed
+              headers: {
+                "x-amz-request-id": this.ctx.id.toString(),
+              }
+            });
+          }
+          
+          // If-None-Match: return 304 if ETag matches (resource hasn't changed)
+          if (ifNoneMatch) {
+            const etags = ifNoneMatch.split(',').map(tag => tag.trim());
+            if (etags.includes(objectETag) || ifNoneMatch === "*") {
+              return new Response(null, {
+                status: 304, // Not Modified
+                headers: {
+                  "ETag": objectETag,
+                  "Last-Modified": obj.uploaded.toUTCString(),
+                  "x-amz-request-id": this.ctx.id.toString(),
+                }
+              });
+            }
+          }
+          
+          return new Response(null, { 
+            status: 200,
+            headers: {
+              "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream",
+              "Content-Length": obj.size.toString(),
+              "ETag": objectETag,
+              "Last-Modified": obj.uploaded.toUTCString(),
+              "Accept-Ranges": "bytes",
+              "x-amz-request-id": this.ctx.id.toString(),
+            }
+          });
+        }
+        case "GET": {
+          const obj = await this.env.R2_BUCKET.get(pathWithoutLeadingSlash);
+          if (!obj) {
+            // simulate aws s3 error
+            return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+    <Code>NoSuchKey</Code>
+    <Message>The specified key does not exist.</Message>
+    <Key>${pathWithoutLeadingSlash}</Key>
+    <RequestId>${this.ctx.id.toString()}</RequestId>
+    <HostId>${this.ctx.id.toString()}</HostId>
+</Error>`
+              , { status: 404 });
+          }
+          
+          // Handle conditional requests
+          const ifMatch = request.headers.get("If-Match");
+          const ifNoneMatch = request.headers.get("If-None-Match");
+          const objectETag = `"${obj.etag}"`;
+          
+          // If-Match: return 412 if ETag doesn't match
+          if (ifMatch && ifMatch !== "*" && ifMatch !== objectETag) {
+            return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+    <Code>PreconditionFailed</Code>
+    <Message>At least one of the preconditions you specified did not hold.</Message>
+    <Condition>If-Match</Condition>
+    <RequestId>${this.ctx.id.toString()}</RequestId>
+    <HostId>${this.ctx.id.toString()}</HostId>
+</Error>`, {
+              status: 412, // Precondition Failed
+              headers: {
+                "Content-Type": "application/xml",
+                "x-amz-request-id": this.ctx.id.toString(),
+              }
+            });
+          }
+          
+          // If-None-Match: return 304 if ETag matches (resource hasn't changed)
+          if (ifNoneMatch) {
+            const etags = ifNoneMatch.split(',').map(tag => tag.trim());
+            if (etags.includes(objectETag) || ifNoneMatch === "*") {
+              return new Response(null, {
+                status: 304, // Not Modified
+                headers: {
+                  "ETag": objectETag,
+                  "Last-Modified": obj.uploaded.toUTCString(),
+                  "x-amz-request-id": this.ctx.id.toString(),
+                }
+              });
+            }
+          }
+          
+          return new Response(obj.body as unknown as ReadableStream, {
+            headers: {
+              "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream",
+              "Content-Length": obj.size.toString(),
+              "ETag": objectETag,
+              "Last-Modified": obj.uploaded.toUTCString(),
+              "Accept-Ranges": "bytes",
+              "x-amz-request-id": this.ctx.id.toString(),
+            },
+          });
+          
+        }
+        case "PUT": {
+          const obj = await this.env.R2_BUCKET.put(pathWithoutLeadingSlash, request.body as unknown as ArrayBuffer);
+          if (!obj) return new Response("Not found", { status: 404 });
+          return new Response(null, {
+            status: 204,
+            headers: {
+              "ETag": `"${obj.etag}"`,
+              "x-amz-request-id": this.ctx.id.toString(),
+            },
+          });
+        }
+        case "DELETE": {
+          // Check if object exists first (optional, but allows for proper error messages)
+          const exists = await this.env.R2_BUCKET.head(pathWithoutLeadingSlash);
+          if (!exists) {
+            // AWS S3 is idempotent - returns 204 even if object doesn't exist
+            // But we can be more explicit with a 404 error
+            return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+    <Code>NoSuchKey</Code>
+    <Message>The specified key does not exist.</Message>
+    <Key>${pathWithoutLeadingSlash}</Key>
+    <RequestId>${this.ctx.id.toString()}</RequestId>
+    <HostId>${this.ctx.id.toString()}</HostId>
+</Error>`, { 
+              status: 404,
+              headers: {
+                "Content-Type": "application/xml",
+                "x-amz-request-id": this.ctx.id.toString(),
+              }
+            });
+          }
+          
+          // Delete the object
+          await this.env.R2_BUCKET.delete(pathWithoutLeadingSlash);
+          
+          // S3 returns 204 No Content on successful deletion
+          return new Response(null, { 
+            status: 204,
+            headers: {
+              "x-amz-request-id": this.ctx.id.toString(),
+            }
+          });
+        }
+        default:
+          return new Response("Method not allowed", { status: 405 });
+      }
+    }
+
+    // Initialize HTTP Proxy connection with infinite retry loop
+    private async initHTTPProxy(): Promise<void> {
+      console.error("Initializing HTTP Proxy connection");
+      // Check if a loop is already running
+      if (this.httpProxyLoopPromise) {
+        console.error("HTTP Proxy loop already running, returning existing promise");
+        return this.httpProxyLoopPromise;
+      }
+      
+      // Reset stop flag and create new loop promise
+      this.httpProxyLoopShouldStop = false;
+      
+      this.httpProxyLoopPromise = (async () => {
+        console.error("Starting HTTP Proxy connection loop...");
+        
+        try {
+          while (true) {
+            console.error("HTTP Proxy loop iteration");
+            try {
+              const status = await this.getStatus();
+              
+              // Exit loop if stop requested or container is stopping/stopped
+              if (this.httpProxyLoopShouldStop) {
+                console.error("HTTP Proxy loop stop requested, exiting...");
+                break;
+              }
+              
+              if (status === 'stopping' || status === 'stopped') {
+                console.error("Container stopping/stopped, exiting HTTP Proxy loop");
+                break;
+              }
+              
+              // Only attempt connection if container is running
+              if (status !== 'running') {
+                console.error("Container not running yet, waiting before HTTP Proxy connection...");
+                await new Promise(resolve => setTimeout(resolve, 5000));
+                continue;
+              }
+              
+              console.error("Initializing HTTP Proxy connection...");
+              this.httpProxyControl = new HTTPProxyControl(this.ctx, () => this.getStatus(), (r) => this.fetchFromR2(r));
+              
+              
+              await this.httpProxyControl.connect();
+              console.error("HTTP Proxy connected successfully");
+              
+              // Wait for disconnection (this will throw when connection is lost)
+              await this.httpProxyControl.waitForDisconnect();
+              console.error("HTTP Proxy disconnected");
+              // wait for 1 second before trying again
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (error) {
+              console.error("HTTP Proxy error:", error);
+              
+              // Clean up current connection
+              if (this.httpProxyControl) {
+                try {
+                  await this.httpProxyControl.disconnect();
+                } catch (e) {
+                  console.error("Error during proxy cleanup:", e);
+                }
+                this.httpProxyControl = null;
+              }
+              
+              // Check if we should continue trying
+              if (this.httpProxyLoopShouldStop) {
+                console.error("HTTP Proxy loop stop requested, exiting...");
+                break;
+              }
+              
+              const status = await this.getStatus();
+              if (status === 'stopping' || status === 'stopped') {
+                console.error("Container stopped, exiting HTTP Proxy loop");
+                break;
+              }
+              
+              // Wait before reconnecting
+              console.error("Reconnecting HTTP Proxy in 5 seconds...");
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+          }
+        } finally {
+          // Clean up when loop exits
+          console.error("HTTP Proxy loop exited, cleaning up...");
+          this.httpProxyLoopPromise = null;
+          this.httpProxyLoopShouldStop = false;
+        }
+      })();
+      
+      return this.httpProxyLoopPromise;
+    }
+
+    // Disconnect HTTP Proxy
+    private async disconnectHTTPProxy() {
+      if (this.httpProxyControl) {
+        await this.httpProxyControl.disconnect();
+        this.httpProxyControl = null;
+      }
+    }
+}
+
+// Control channel messages
+type ControlMessage = 
+  | { type: "allocate_channel"; requestId: string; port: number }
+  | { type: "channel_allocated"; requestId: string; port: number }
+  | { type: "channel_released"; port: number }
+  | { type: "error"; requestId: string; message: string };
+
+interface DataChannelState {
+  port: number;
+  socket: any | null; // Cloudflare TCP Socket
+  reader: ReadableStreamDefaultReader | null;
+  writer: WritableStreamDefaultWriter | null;
+  inUse: boolean;
+}
+
+/**
+ * HTTP Proxy Control Manager
+ * Manages control channel and data channel pool for HTTP proxy
+ */
+class HTTPProxyControl {
+  private controlSocket: CloudflareTCPSocket | null = null;
+  private controlWriter: WritableStreamDefaultWriter | null = null;
+  private controlReader: ReadableStreamDefaultReader | null = null;
+  private controlBuffer: Buffer = Buffer.alloc(0);
+  private dataChannels: Map<number, DataChannelState> = new Map();
+  private isConnected = false;
+  private disconnectPromise: Promise<void> | null = null;
+  private disconnectResolve: (() => void) | null = null;
+  private disconnectReject: ((error: Error) => void) | null = null;
+  
+  private CONTROL_PORT = 8084;
+  private DATA_PORT_START = 8085;
+  private DATA_PORT_END = 8109;
+
+  constructor(
+    private ctx: DurableObject['ctx'],
+    private stateProvider: () => Promise<'running' | 'stopping' | 'stopped' | 'starting'>,
+    private fetchImplementation: (request: Request) => Promise<Response>
+  ) {}
+
+  private get container() {
+    return this.ctx.container;
+  }
+
+  private waitUntil(promise: Promise<void>, description: string): void {
+    return this.ctx.waitUntil(promise.then(() => {
+      console.error("Wait until promise resolved", description);
+    }).catch((error) => {
+      console.error("Wait until promise rejected:" + description, error);
+    }));
+  }
+
+  async connect(): Promise<void> {
+    const state = await this.stateProvider();
+    
+    // Always initialize disconnect promise so waitForDisconnect() doesn't fail
+    this.disconnectPromise = new Promise<void>((resolve, reject) => {
+      this.disconnectResolve = resolve;
+      this.disconnectReject = reject;
+    });
+    
+    if (state !== 'running') {
+      console.error("Container not running, skipping HTTP Proxy connection");
+      // Resolve immediately so waitForDisconnect() returns
+      if (this.disconnectResolve) {
+        this.disconnectResolve();
+      }
+      throw new Error("Container not running");
+    }
+
+    try {
+      // Connect control channel
+      await this.connectControlChannel();
+      console.error("HTTP Proxy control channel connected");
+      
+      // Connect data channels
+      await this.connectDataChannels();
+      console.error("HTTP Proxy data channels connected");
+      
+
+      console.error("HTTP Proxy control and data channels connected");
+    } catch (error) {
+      console.error("Failed to connect HTTP Proxy:", error);
+      // Signal disconnection on error
+      if (this.disconnectResolve) {
+        this.disconnectResolve();
+      }
+      throw error;
+    }
+  }
+
+  async waitForDisconnect(): Promise<void> {
+    if (!this.disconnectPromise) {
+      throw new Error("Not connected");
+    }
+    return this.disconnectPromise;
+  }
+
+  private async connectControlChannel() {
+    const port = this.container?.getTcpPort(this.CONTROL_PORT);
+    if (!port) {
+      throw new Error("Failed to get control channel TCP port");
+    }
+
+    console.error("Connecting to control channel on port", this.CONTROL_PORT);
+    
+    try {
+      this.controlSocket = port.connect(`localhost:${this.CONTROL_PORT}`);
+      await this.controlSocket.opened;
+      this.isConnected = true;
+      
+      this.controlWriter = this.controlSocket.writable.getWriter();
+      this.controlReader = this.controlSocket.readable.getReader();
+      
+      // Start reading control messages
+      this.waitUntil(this.readControlMessages(), "readControlMessages");
+      
+      console.error("Control channel connected");
+    } catch (error) {
+      console.error("Failed to connect control channel:", error);
+      // Clean up on failure
+      this.controlReader = null;
+      this.controlWriter = null;
+      this.controlSocket = null;
+      throw error;
+    }
+  }
+
+  private async connectDataChannels() {
+    console.error(`Connecting data channels ${this.DATA_PORT_START}-${this.DATA_PORT_END}...`);
+    
+    for (let portNum = this.DATA_PORT_START; portNum <= this.DATA_PORT_END; portNum++) {
+      this.dataChannels.set(portNum, {
+        port: portNum,
+        socket: null,
+        reader: null,
+        writer: null,
+        inUse: false,
+      });
+    }
+    
+    console.error(`${this.dataChannels.size} data channels initialized`);
+  }
+
+  private async readControlMessages() {
+    console.error("Reading control messages");
+    if (!this.controlReader) {
+      console.error("Control reader not available");
+      return;
+    }
+
+    try {
+      while (this.isConnected && this.controlReader) {
+        console.error("Reading control message stream");
+        const { done, value } = await this.controlReader.read();
+        if (done) {
+          console.error("Control channel closed");
+          this.handleDisconnect();
+          return;
+        }
+
+
+        // Append incoming bytes to rolling buffer
+        const incoming = Buffer.from(value);
+        this.controlBuffer = Buffer.concat([this.controlBuffer, incoming]);
+        console.error("Got control message stream", incoming.byteLength, this.controlBuffer.byteLength);
+
+        // Extract as many complete frames as available
+        while (true) {
+          if (this.controlBuffer.length < 4) {
+            // Not enough data to know frame length yet
+            break;
+          }
+
+          const frameLength = this.controlBuffer.readUInt32LE(0);
+          const totalFrameSize = 4 + frameLength;
+
+          if (this.controlBuffer.length < totalFrameSize) {
+            // Incomplete frame, wait for more data
+            break;
+          }
+
+          // Slice out this complete frame and advance buffer
+          const frame = this.controlBuffer.slice(0, totalFrameSize);
+          this.controlBuffer = this.controlBuffer.slice(totalFrameSize);
+
+          const message = this.parseControlMessage(frame);
+          if (message) {
+            await this.handleControlMessage(message);
+          } else {
+            console.error("Failed to parse control message frame; skipping");
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error reading control messages:", error);
+      // Ignore errors if we're already disconnecting
+      if (this.isConnected) {
+        console.error("Error reading control messages:", error);
+      }
+      this.handleDisconnect();
+    }
+    console.error("Control messages read", !!this.isConnected, !!this.controlReader);
+  }
+
+  private parseControlMessage(data: Buffer): ControlMessage | null {
+    console.error("Parsing control message:", data);
+    try {
+      if (data.length < 4) return null;
+      
+      const length = data.readUInt32LE(0);
+      if (data.length < 4 + length) return null;
+      
+      const jsonData = data.slice(4, 4 + length);
+      const jsonText = jsonData.toString('utf-8');
+      console.error("Parsed control message:", jsonText);
+      return JSON.parse(jsonText) as ControlMessage;
+    } catch (error) {
+      console.error("Failed to parse control message:", error);
+      return null;
+    }
+  }
+
+  private async handleControlMessage(message: ControlMessage) {
+    console.error("Received control message:", message);
+    
+    switch (message.type) {
+      case "allocate_channel":
+        await this.handleChannelAllocation(message.requestId, message.port);
+        break;
+        
+      case "channel_released":
+        await this.releaseChannel(message.port);
+        break;
+      default:
+        console.error("Unknown control message type:", message.type);
+        break;
+    }
+  }
+
+  private async handleChannelAllocation(requestId: string, port: number) {
+    console.error("Handling channel allocation for:", requestId, "on port:", port);
+    try {
+      // Use the port specified by http-proxy.ts
+      const channel = this.dataChannels.get(port);
+      
+      if (!channel) {
+        console.error("Requested channel not found:", port);
+        await this.sendControlMessage({
+          type: "error",
+          requestId,
+          message: "Requested channel not found",
+        });
+        return;
+      }
+      
+      if (channel.inUse) {
+        console.error("Requested channel already in use:", port);
+        await this.sendControlMessage({
+          type: "error",
+          requestId,
+          message: "Requested channel already in use",
+        });
+        return;
+      }
+
+      // Mark as in use
+      channel.inUse = true;
+      
+      // Connect to the data channel
+      await this.connectDataChannel(channel);
+      
+      // Send allocation response
+      await this.sendControlMessage({
+        type: "channel_allocated",
+        requestId,
+        port: channel.port,
+      });
+      
+      // Handle the HTTP request/response on this channel
+      this.waitUntil(this.handleDataChannel(channel), "handleDataChannel");
+      
+    } catch (error) {
+      console.error(`Failed to allocate channel for ${requestId}:`, error);
+      await this.sendControlMessage({
+        type: "error",
+        requestId,
+        message: String(error),
+      });
+    }
+  }
+
+  private async connectDataChannel(channel: DataChannelState) {
+    const port = this.container?.getTcpPort(channel.port);
+    if (!port) {
+      console.error("Failed to get TCP port", channel.port);
+      throw new Error(`Failed to get TCP port ${channel.port}`);
+    }
+
+    console.error(`Connecting to data channel on port ${channel.port}`);
+    channel.socket = port.connect(`localhost:${channel.port}`);
+    await channel.socket.opened;
+    
+    channel.writer = channel.socket.writable.getWriter();
+    channel.reader = channel.socket.readable.getReader();
+    
+    console.error(`Data channel ${channel.port} connected`);
+  }
+
+  private async handleDataChannel(channel: DataChannelState) {
+    // Keep-alive loop: handle multiple requests on the same channel
+    while (channel.socket && channel.reader && channel.writer) {
+      try {
+        // Read HTTP request from the data channel
+        const request = await this.readHTTPRequest(channel);
+        
+        // Make the actual fetch request
+        console.error(`Proxying ${request.method} ${request.url}`);
+        const response = await this.fetchImplementation(request);
+        
+        // Send HTTP response back to the data channel
+        await this.sendHTTPResponse(channel, response);
+        
+        // Successfully completed request - loop to handle next one
+        console.error(`Data channel ${channel.port} ready for next request`);
+        
+      } catch (error) {
+        console.error(`Error handling data channel ${channel.port}:`, error);
+        
+        // Check if it's a socket closure (normal end of keep-alive)
+        const errorMessage = String(error);
+        if (errorMessage.includes("closed") || errorMessage.includes("EOF") || errorMessage.includes("done")) {
+          console.error(`Data channel ${channel.port} closed gracefully, exiting loop`);
+          break;
+        }
+        
+        // Try to send error response
+        try {
+          await this.sendErrorResponse(channel, errorMessage);
+        } catch (e) {
+          console.error("Failed to send error response:", e);
+          break; // Exit loop if we can't send error
+        }
+        
+        // On error, close the channel and exit loop
+        break;
+      }
+    }
+    
+    // Clean up when exiting loop
+    await this.closeDataChannel(channel);
+  }
+
+  private async readHTTPRequest(channel: DataChannelState): Promise<Request> {
+    console.error("Reading HTTP request from data channel:", channel.port);
+    if (!channel.reader) {
+      console.error("Channel reader not available");
+      throw new Error("Channel reader not available");
+    }
+
+    let buffer = Buffer.alloc(0);
+    let headersParsed = false;
+    let method = "GET";
+    let url = "";
+    let headers = new Headers();
+    let bodyChunks: Uint8Array[] = [];
+    let contentLength: number | null = null;
+    let isChunked = false;
+    let bodyReceived = 0;
+
+    while (true) {
+      const { done, value } = await channel.reader.read();
+      
+      if (done) {
+        // Stream closed - if we haven't parsed headers yet, this is an error
+        if (!headersParsed) {
+          throw new Error("Connection closed before receiving complete request");
+        }
+        break;
+      }
+
+      const chunk = Buffer.from(value);
+      buffer = Buffer.concat([buffer, chunk]);
+
+      if (!headersParsed) {
+        // Look for end of headers (\r\n\r\n)
+        const headerEnd = buffer.indexOf('\r\n\r\n');
+        
+        if (headerEnd !== -1) {
+          const headerText = buffer.slice(0, headerEnd).toString('utf-8');
+          const lines = headerText.split('\r\n');
+          
+          // Parse request line
+          const requestLine = lines[0];
+          const [reqMethod, path] = requestLine.split(' ');
+          method = reqMethod;
+          
+          // Parse headers to get Host
+          let host = 'localhost';
+          for (let i = 1; i < lines.length; i++) {
+            const colonIndex = lines[i].indexOf(':');
+            if (colonIndex > 0) {
+              const key = lines[i].slice(0, colonIndex).trim().toLowerCase();
+              const value = lines[i].slice(colonIndex + 1).trim();
+              headers.set(key, value);
+              
+              if (key === 'host') {
+                host = value;
+              }
+              if (key === 'content-length') {
+                contentLength = parseInt(value);
+              }
+              if (key === 'transfer-encoding' && value.toLowerCase().includes('chunked')) {
+                isChunked = true;
+              }
+            }
+          }
+          
+          // Construct full URL. We don't use the protocol from the request because we want to force HTTPS.
+          const protocol = 'https';
+          url = `${protocol}://${host}${path}`;
+          
+          headersParsed = true;
+          
+          // Remaining data is body
+          const bodyStart = headerEnd + 4;
+          if (bodyStart < buffer.length) {
+            const bodyData = buffer.slice(bodyStart);
+            bodyChunks.push(bodyData);
+            bodyReceived += bodyData.length;
+          }
+          
+          buffer = Buffer.alloc(0);
+          
+          // Check if we're done reading the body
+          if (this.isRequestBodyComplete(contentLength, bodyReceived, isChunked, bodyChunks)) {
+            break;
+          }
+        }
+      } else {
+        // Collecting body
+        bodyChunks.push(buffer);
+        bodyReceived += buffer.length;
+        buffer = Buffer.alloc(0);
+        
+        // Check if we're done reading the body
+        if (this.isRequestBodyComplete(contentLength, bodyReceived, isChunked, bodyChunks)) {
+          break;
+        }
+      }
+    }
+
+    // Decode body if needed
+    let body: Buffer | null = null;
+    if (bodyChunks.length > 0) {
+      const combinedChunks = Buffer.concat(bodyChunks);
+      
+      if (isChunked) {
+        // Decode chunked encoding
+        body = this.decodeChunkedBody(combinedChunks);
+        console.error(`Decoded chunked body: ${body.length} bytes`);
+      } else {
+        body = combinedChunks;
+      }
+    }
+
+    return new Request(url, {
+      method,
+      headers,
+      // @ts-expect-error
+      body: body || undefined,
+    });
+  }
+
+  private isRequestBodyComplete(
+    contentLength: number | null,
+    bodyReceived: number,
+    isChunked: boolean,
+    bodyChunks: Uint8Array[]
+  ): boolean {
+    // If we have content-length, check if we've received enough
+    if (contentLength !== null && bodyReceived >= contentLength) {
+      return true;
+    }
+    
+    // If chunked, look for the terminator
+    if (isChunked && bodyChunks.length > 0) {
+      const lastChunk = bodyChunks[bodyChunks.length - 1];
+      const lastBytes = lastChunk.slice(-5);
+      // @ts-expect-error
+      const text = lastBytes.toString('utf-8');
+      if (text.includes('0\r\n\r\n')) {
+        return true;
+      }
+    }
+    
+    // If no content-length and not chunked, we have no body
+    if (contentLength === null && !isChunked) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  private decodeChunkedBody(encoded: Buffer): Buffer {
+    const decodedChunks: Buffer[] = [];
+    let pos = 0;
+    
+    while (pos < encoded.length) {
+      // Find the chunk size line (ends with \r\n)
+      let lineEnd = pos;
+      while (lineEnd < encoded.length - 1) {
+        if (encoded[lineEnd] === 0x0d && encoded[lineEnd + 1] === 0x0a) {
+          break;
+        }
+        lineEnd++;
+      }
+      
+      if (lineEnd >= encoded.length - 1) break;
+      
+      const sizeLine = encoded.slice(pos, lineEnd).toString('utf-8');
+      const chunkSize = parseInt(sizeLine.split(';')[0].trim(), 16);
+      
+      if (chunkSize === 0) {
+        // Last chunk
+        break;
+      }
+      
+      pos = lineEnd + 2; // Skip \r\n
+      
+      if (pos + chunkSize <= encoded.length) {
+        decodedChunks.push(encoded.slice(pos, pos + chunkSize));
+        pos += chunkSize + 2; // Skip chunk data and trailing \r\n
+      } else {
+        break;
+      }
+    }
+    
+    return decodedChunks.length > 0 ? Buffer.concat(decodedChunks) : Buffer.alloc(0);
+  }
+
+  private async sendHTTPResponse(channel: DataChannelState, response: Response) {
+    console.error("Sending HTTP response:", response);
+    if (!channel.writer) {
+      throw new Error("Channel writer not available");
+    }
+
+    // Send status line
+    const statusLine = `HTTP/1.1 ${response.status} ${response.statusText}\r\n`;
+    await channel.writer.write(new TextEncoder().encode(statusLine));
+    console.error("Sent status line", statusLine);
+
+    // Send headers
+    let hasContentLength = false;
+    for (const [key, value] of (response as unknown as CloudflareResponse).headers.entries()) {
+      const headerLine = `${key}: ${value}\r\n`;
+      await channel.writer.write(new TextEncoder().encode(headerLine));
+      if (key.toLowerCase() === 'content-length') {
+        hasContentLength = true;
+      }
+    }
+    // If response has no body and no Content-Length header, add Content-Length: 0
+    // This is critical for keep-alive connections to know when response is complete
+    if (!response.body && !hasContentLength) {
+      const headerLine = `Content-Length: 0\r\n`;
+      await channel.writer.write(new TextEncoder().encode(headerLine));
+    }
+    console.error("Sent headers");
+
+    // End headers
+    await channel.writer.write(new TextEncoder().encode('\r\n'));
+    console.error("Sent end headers");
+
+    // Send body
+    if (response.body) {
+      console.error("Sending body");
+      const reader = response.body.getReader();
+      try {
+        while (true) {
+          console.error("Sending body chunk");
+          const { done, value } = await reader.read();
+          if (done) break;
+          await channel.writer.write(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+
+    console.error(`Sent HTTP response for data channel ${channel.port}`);
+  }
+
+  private async sendErrorResponse(channel: DataChannelState, error: string) {
+    console.error("Sending error response:", error);
+    if (!channel.writer) return;
+
+    const errorBody = `Proxy Error: ${error}`;
+    const statusLine = `HTTP/1.1 502 Bad Gateway\r\n`;
+    const headers = `Content-Type: text/plain\r\nContent-Length: ${errorBody.length}\r\n\r\n`;
+    
+    await channel.writer.write(new TextEncoder().encode(statusLine + headers + errorBody));
+  }
+
+  private async closeDataChannel(channel: DataChannelState) {
+    console.error("Closing data channel:", channel.port);
+    try {
+      if (channel.reader) {
+        await channel.reader.cancel();
+        channel.reader.releaseLock();
+        channel.reader = null;
+      }
+      
+      if (channel.writer) {
+        await channel.writer.close();
+        channel.writer = null;
+      }
+      
+      if (channel.socket) {
+        await channel.socket.close();
+        channel.socket = null;
+      }
+      
+      channel.inUse = false;
+      
+      console.error(`Data channel ${channel.port} closed`);
+    } catch (error) {
+      console.error(`Error closing data channel ${channel.port}:`, error);
+    }
+  }
+
+  private async releaseChannel(port: number) {
+    const channel = this.dataChannels.get(port);
+    if (channel) {
+      await this.closeDataChannel(channel);
+    }
+  }
+
+  private async sendControlMessage(message: ControlMessage): Promise<void> {
+    console.error("Sending control message:", message);
+    if (!this.controlWriter) {
+      console.warn("Cannot send control message, writer not available");
+      return;
+    }
+
+    try {
+      const json = JSON.stringify(message);
+      const jsonBytes = Buffer.from(json, 'utf-8');
+      
+      // Length-prefixed message
+      const buffer = Buffer.alloc(4 + jsonBytes.length);
+      buffer.writeUInt32LE(jsonBytes.length, 0);
+      jsonBytes.copy(buffer, 4);
+      
+      await this.controlWriter.write(new Uint8Array(buffer));
+    } catch (error) {
+      console.error("Failed to send control message:", error);
+    }
+  }
+
+  private handleDisconnect() {
+    this.isConnected = false;
+    
+    // Signal disconnection to the infinite retry loop
+    if (this.disconnectResolve) {
+      this.disconnectResolve();
+      this.disconnectResolve = null;
+      this.disconnectReject = null;
+    }
+  }
+
+  async disconnect() {
+    console.error("Disconnecting HTTP Proxy");
+    // Close all data channels
+    for (const channel of this.dataChannels.values()) {
+      await this.closeDataChannel(channel);
+    }
+
+    // Close control channel
+    try {
+      if (this.controlReader) {
+        await this.controlReader.cancel();
+        this.controlReader.releaseLock();
+        this.controlReader = null;
+      }
+      
+      if (this.controlWriter) {
+        await this.controlWriter.close();
+        this.controlWriter = null;
+      }
+      
+      if (this.controlSocket) {
+        await this.controlSocket.close();
+        this.controlSocket = null;
+      }
+    } catch (error) {
+      console.error("Error disconnecting HTTP Proxy:", error);
+    }
+
+    this.isConnected = false;
+    
+    // Clean up disconnect promise
+    if (this.disconnectResolve) {
+      this.disconnectResolve();
+      this.disconnectResolve = null;
+      this.disconnectReject = null;
+    }
+    this.disconnectPromise = null;
+  }
 }

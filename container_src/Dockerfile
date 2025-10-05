@@ -9,6 +9,9 @@ ENV TYPE=PAPER
 # Match the VERSION here (for minecraft version) to the compatible version of Dynmap you downloaded
 ENV VERSION=1.21.7
 
+# HTTP Proxy configuration - directs all HTTP/HTTPS traffic through the proxy
+ENV AWS_ENDPOINT_URL=http://localhost:3128
+
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         curl \
@@ -26,7 +29,9 @@ COPY start-with-services.sh /usr/local/bin/start-with-services.sh
 COPY dynmap-configuration.txt /dynmap-configuration.txt
 COPY Dynmap-3.7-beta-11-spigot.jar /data/plugins/dynmap.jar
 COPY optional_plugins/ /data/optional_plugins/
+COPY http-proxy /usr/local/bin/http-proxy
 RUN chmod +x /usr/local/bin/start-with-services.sh \
+    && chmod +x /usr/local/bin/http-proxy \
     && mkdir -p /run/tailscale \
     && chown -R 1000:1000 /data \
     && chown -R 1000:1000 /run/tailscale
@@ -35,7 +40,7 @@ USER 1000:1000
 
 RUN sudo curl -fsSL https://raw.githubusercontent.com/eastlondoner/hteetp/main/install.sh | sh
 
-EXPOSE 8080 8081 8082 8083 8123 25575
+EXPOSE 8080 8081 8082 8083 8084 8085 8086 8087 8088 8089 8090 8091 8092 8093 8094 8095 8096 8097 8098 8099 8100 8101 8102 8103 8104 8105 8106 8107 8108 8109 8114 25575
 
 ENTRYPOINT ["/usr/local/bin/start-with-services.sh"]
 CMD ["/image/scripts/start"]

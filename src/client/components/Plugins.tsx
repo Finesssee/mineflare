@@ -225,7 +225,20 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
   }
 
   return (
-    <div style={{
+    <>
+      <style>{`
+        @keyframes pulse-glow {
+          0%, 100% {
+            opacity: 1;
+            box-shadow: 0 0 0 rgba(255, 182, 0, 0);
+          }
+          50% {
+            opacity: 0.85;
+            box-shadow: 0 0 8px rgba(255, 182, 0, 0.3);
+          }
+        }
+      `}</style>
+      <div style={{
       background: 'rgba(26, 46, 30, 0.4)',
       backdropFilter: 'blur(10px)',
       border: '1px solid rgba(87, 166, 78, 0.2)',
@@ -391,7 +404,7 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
                             e.currentTarget.style.opacity = '1';
                           }}
                         >
-                          {statusIcon.label[0]}: {message}
+                          {statusIcon.icon} {message}
                         </div>
                         
                         {/* Tooltip */}
@@ -957,7 +970,8 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 
