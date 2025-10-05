@@ -50,6 +50,12 @@ start_tailscale() {
   # Support both TAILSCALE_AUTHKEY and TS_AUTHKEY (from worker)
   AUTHKEY="${TS_AUTHKEY:-${TAILSCALE_AUTHKEY:-}}"
   
+  # Skip Tailscale if no authkey is provided
+  if [ -z "${AUTHKEY}" ]; then
+    echo "Skipping Tailscale (no TS_AUTHKEY found)"
+    return
+  fi
+  
   # Use TS_EXTRA_ARGS if available, fallback to TAILSCALE_ARGS
   EXTRA_ARGS="${TS_EXTRA_ARGS:-${TAILSCALE_ARGS:-}}"
 

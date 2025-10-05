@@ -24,12 +24,13 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
   const [hoveredInfo, setHoveredInfo] = useState<string | null>(null);
   const [hoveredWarning, setHoveredWarning] = useState<string | null>(null);
   const [hoveredToggle, setHoveredToggle] = useState<string | null>(null);
-  const [hoveredStatus, setHoveredStatus] = useState<string | null>(null);
+  const [hoveredMessage, setHoveredMessage] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
   const [envModalPlugin, setEnvModalPlugin] = useState<Plugin | null>(null);
   const [envModalMode, setEnvModalMode] = useState<'edit' | 'enable'>('edit');
   const [envFormData, setEnvFormData] = useState<Record<string, string>>({});
   const [envSaving, setEnvSaving] = useState(false);
+  const [statusModalPlugin, setStatusModalPlugin] = useState<Plugin | null>(null);
 
   const fetchPlugins = async () => {
     try {
@@ -153,14 +154,48 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
   const getStatusIcon = (status: Plugin['status']) => {
     switch (status.type) {
       case 'information':
-        return { icon: 'ℹ️', color: '#4682B4' };
+        return { icon: 'ℹ️', color: '#4682B4', label: 'Information' };
       case 'warning':
-        return { icon: '⚠️', color: '#FFB600' };
+        return { icon: '⚠️', color: '#FFB600', label: 'Warning' };
       case 'alert':
-        return { icon: '🚨', color: '#FF4444' };
+        return { icon: '🚨', color: '#FF4444', label: 'Alert' };
       default:
         return null;
     }
+  };
+
+  // Convert URLs in text to clickable links
+  const renderMessageWithLinks = (message: string) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = message.split(urlRegex);
+    
+    return parts.map((part, index) => {
+      if (part.match(urlRegex)) {
+        return (
+          <a
+            key={index}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              color: 'inherit',
+              textDecoration: 'underline',
+              fontWeight: '600',
+              transition: 'opacity 0.2s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.opacity = '0.7';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.opacity = '1';
+            }}
+          >
+            {part}
+          </a>
+        );
+      }
+      return <span key={index}>{part}</span>;
+    });
   };
 
   const canToggle = serverState === 'stopped';
@@ -290,25 +325,99 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
                 alignItems: 'center',
                 gap: '12px',
                 flex: 1,
+                minWidth: 0,
               }}>
-                <span style={{ fontSize: '1.5rem' }}>
+                <span style={{ fontSize: '1.5rem', flexShrink: 0 }}>
                   {info?.emoji || '🔌'}
                 </span>
-                <div style={{ flex: 1 }}>
-                  <div style={{
-                    color: '#fff',
-                    fontWeight: '600',
-                    fontSize: '0.9375rem',
-                    marginBottom: '2px',
-                  }}>
-                    {plugin.displayName}
+                <div style={{ 
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  minWidth: 0,
+                  flex: 1,
+                }}>
+                  <div style={{ flexShrink: 0 }}>
+                    <div style={{
+                      color: '#fff',
+                      fontWeight: '600',
+                      fontSize: '0.9375rem',
+                      marginBottom: '2px',
+                    }}>
+                      {plugin.displayName}
+                    </div>
+                    <div style={{
+                      color: '#888',
+                      fontSize: '0.75rem',
+                    }}>
+                      {enabled ? 'Active' : 'Inactive'}
+                    </div>
                   </div>
-                  <div style={{
-                    color: '#888',
-                    fontSize: '0.75rem',
-                  }}>
-                    {enabled ? 'Active' : 'Inactive'}
-                  </div>
+                  
+                  {/* Message preview for warnings/alerts */}
+                  {statusIcon && plugin.status.type !== 'no message' && (() => {
+                    const message = 'message' in plugin.status ? plugin.status.message : '';
+                    return (
+                      <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                        <div
+                          onClick={() => setStatusModalPlugin(plugin)}
+                          style={{
+                            fontFamily: '"Courier New", Courier, monospace',
+                            fontSize: '0.8rem',
+                            lineHeight: '1.4',
+                            color: statusIcon.color === '#FF4444'
+                              ? '#ffaaaa'
+                              : statusIcon.color === '#FFB600'
+                              ? '#ffd666'
+                              : '#88b3dd',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            minWidth: 0,
+                            paddingRight: '8px',
+                          } as any}
+                          onMouseEnter={(e) => {
+                            setHoveredMessage(plugin.filename);
+                            e.currentTarget.style.textDecoration = 'underline';
+                            e.currentTarget.style.opacity = '0.8';
+                          }}
+                          onMouseLeave={(e) => {
+                            setHoveredMessage(null);
+                            e.currentTarget.style.textDecoration = 'none';
+                            e.currentTarget.style.opacity = '1';
+                          }}
+                        >
+                          {statusIcon.label[0]}: {message}
+                        </div>
+                        
+                        {/* Tooltip */}
+                        {hoveredMessage === plugin.filename && (
+                          <div style={{
+                            position: 'absolute',
+                            bottom: '100%',
+                            left: '0',
+                            marginBottom: '8px',
+                            padding: '8px 12px',
+                            background: 'rgba(0, 0, 0, 0.95)',
+                            border: '1px solid rgba(87, 166, 78, 0.3)',
+                            borderRadius: '8px',
+                            color: '#b0b0b0',
+                            fontSize: '0.75rem',
+                            whiteSpace: 'nowrap',
+                            zIndex: 1000,
+                            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+                            pointerEvents: 'none',
+                          }}>
+                            Click to view full {statusIcon.label.toLowerCase()}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -348,44 +457,6 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
                   >
                     ⚙️
                   </button>
-                )}
-
-                {/* Plugin status icon */}
-                {statusIcon && (
-                  <div
-                    style={{
-                      position: 'relative',
-                      cursor: 'help',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '1.125rem',
-                    }}
-                    onMouseEnter={() => setHoveredStatus(plugin.filename)}
-                    onMouseLeave={() => setHoveredStatus(null)}
-                  >
-                    {statusIcon.icon}
-                    {hoveredStatus === plugin.filename && plugin.status.type !== 'no message' && (
-                      <div style={{
-                        position: 'absolute',
-                        bottom: '100%',
-                        right: '0',
-                        marginBottom: '8px',
-                        padding: '12px',
-                        background: 'rgba(0, 0, 0, 0.95)',
-                        border: `1px solid ${statusIcon.color}4D`,
-                        borderRadius: '8px',
-                        color: '#b0b0b0',
-                        fontSize: '0.75rem',
-                        width: '250px',
-                        zIndex: 1000,
-                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
-                        lineHeight: '1.4',
-                      }}>
-                        {plugin.status.message}
-                      </div>
-                    )}
-                  </div>
                 )}
 
                 {/* Warning icon for transitional states (only show when server is running) */}
@@ -510,8 +581,7 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
                       transform: 'translate(-50%, -50%) rotate(-12deg)',
                       fontSize: '0.5rem',
                       fontWeight: '800',
-                      color: '#ff9999',
-                      textShadow: '0 1px 2px rgba(0, 0, 0, 0.5)',
+                      color: 'rgb(187 18 0)',
                       letterSpacing: '0.02em',
                       pointerEvents: 'none',
                       whiteSpace: 'nowrap',
@@ -563,6 +633,111 @@ export function Plugins({ serverState, onPluginToggle }: Props) {
           );
         })}
       </div>
+
+      {/* Status Message Modal - Terminal Style */}
+      {statusModalPlugin && statusModalPlugin.status.type !== 'no message' && (() => {
+        const statusIcon = getStatusIcon(statusModalPlugin.status);
+        const terminalColor = statusIcon?.color === '#FF4444'
+          ? '#ffaaaa'
+          : statusIcon?.color === '#FFB600'
+          ? '#ffd666'
+          : '#88b3dd';
+        
+        return (
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 10000,
+              padding: '20px',
+            }}
+            onClick={() => setStatusModalPlugin(null)}
+          >
+            <div
+              style={{
+                background: '#0a0a0a',
+                border: `2px solid ${terminalColor}`,
+                borderRadius: '8px',
+                padding: '0',
+                maxWidth: '600px',
+                width: '100%',
+                boxShadow: `0 20px 60px rgba(0, 0, 0, 0.5), 0 0 20px ${statusIcon?.color}33`,
+                fontFamily: '"Courier New", Courier, monospace',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Terminal Header */}
+              <div style={{
+                background: terminalColor,
+                padding: '12px 20px',
+                borderTopLeftRadius: '6px',
+                borderTopRightRadius: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}>
+                  <span style={{ fontSize: '1rem' }}>{statusIcon?.icon}</span>
+                  <span style={{
+                    color: '#000',
+                    fontWeight: '700',
+                    fontSize: '0.875rem',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                  }}>
+                    {statusIcon?.label} - {statusModalPlugin.displayName}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setStatusModalPlugin(null)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#000',
+                    fontSize: '1.25rem',
+                    cursor: 'pointer',
+                    padding: '0',
+                    lineHeight: 1,
+                    fontWeight: '700',
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Terminal Content */}
+              <div style={{
+                padding: '24px',
+                background: '#0a0a0a',
+                color: terminalColor,
+                fontSize: '0.875rem',
+                lineHeight: '1.6',
+                wordBreak: 'break-word',
+                maxHeight: '400px',
+                overflowY: 'auto',
+                borderBottomLeftRadius: '6px',
+                borderBottomRightRadius: '6px',
+              }}>
+                <div style={{
+                  whiteSpace: 'pre-wrap',
+                }}>
+                  {renderMessageWithLinks('message' in statusModalPlugin.status ? statusModalPlugin.status.message : '')}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Environment Variables Modal */}
       {envModalPlugin && (

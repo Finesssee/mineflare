@@ -32,10 +32,13 @@ const PLUGIN_SPECS = [
 
       // need to check if we find any matching url https://playit.gg/mc/<code>" using regex
       const logs = await container.getLogs();
-      const regex = /https:\/\/playit\.gg\/mc\/(\w+)/g;
-      const matches = logs.match(regex);
-      if(matches) {
-        return { type: "warning", message: "playit.gg is not connected. To connect, visit https://playit.gg/mc/" + matches[0].split("/")[3] };
+      const regex = /https:\/\/playit\.gg\/mc\/([a-f0-9]+)/gi;
+      const matches = [...logs.matchAll(regex)];
+      // get last match if any exist
+      if(matches && matches.length > 0) {
+        const lastMatch = matches[matches.length - 1];
+        const code = lastMatch[1];
+        return { type: "warning", message: "not connected go to https://playit.gg/mc/" + code + " to connect" };
       } else {
         return { type: "information", message: "playit.gg is active" };
       }
@@ -367,7 +370,7 @@ export class MinecraftContainer extends Container<{
   }
 
   public async getLogs(): Promise<string> {
-    const response = await this.containerFetch("http://localhost:8082/logs", 8082);
+    const response = await this.containerFetch("http://localhost:8082/", 8082);
     return await response.text();
   }
 
