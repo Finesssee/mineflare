@@ -38,8 +38,6 @@ do_optional_plugins() {
 }
 start_tailscale() {
 
-
-
   if ! command -v tailscaled >/dev/null 2>&1; then
     return
   fi
@@ -130,6 +128,26 @@ EOF
   echo "playit.gg configuration complete"
 }
 
+start_http_proxy() {
+  echo "Starting HTTP proxy server..."
+  
+  if ! command -v /usr/local/bin/http-proxy >/dev/null 2>&1; then
+    echo "Warning: HTTP proxy binary not found, skipping..."
+    return
+  fi
+  
+  # Run the HTTP proxy server in background
+  (
+    while true; do
+      echo "Starting HTTP proxy (attempt at $(date))"
+      /usr/local/bin/http-proxy || echo "HTTP proxy crashed, restarting in 2 seconds..."
+      sleep 2
+    done
+  ) &
+  
+  echo "HTTP proxy server started in background"
+}
+
 start_file_server() {
   echo "Starting file server on port 8083..."
   
@@ -213,13 +231,16 @@ echo "Starting services..."
 do_optional_plugins || true
 
 # Start Tailscale in background
-start_tailscale
+# start_tailscale
 
 # Configure Dynmap if R2 credentials are available
 configure_dynmap
 
 # Configure playit.gg if PLAYIT_SECRET is available
 # configure_playit
+
+# Start the HTTP proxy server
+start_http_proxy
 
 # Start the file server
 start_file_server

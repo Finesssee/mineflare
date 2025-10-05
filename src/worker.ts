@@ -33,8 +33,8 @@ const elysiaApp = (
     console.log("Getting container");
       const container = getMinecraftContainer();
       // This is the only endpoint that starts the container! But also it cannot be used if the container is shutting down.
-      const state = await container.getState();
-      if(state.status !== "running") {
+      const state = await container.getStatus();
+      if(state !== "running") {
         return { online: false };
       } else {
         console.log("Getting container");
@@ -50,18 +50,17 @@ const elysiaApp = (
       console.log("Getting container");
       const container = getMinecraftContainer();
       // This is the only endpoint that starts the container! But also it cannot be used if the container is shutting down.
-      const state = await container.getState();
-      if(state.status === "stopping") {
+      const state = await container.getStatus();
+      if(state === "stopping") {
         return { online: false };
       }
-      console.log("Starting container");
-      await container.start();
-      const response = await container.fetch(new Request("http://localhost/rcon/status"));
-      if(!response.ok) {
-        console.error("Failed to get status", response.status, await response.text());
-        return { online: false };
+      if(state !== "running") {
+        console.log("Starting container");
+        await container.start();
       }
-      const status = await response.json();
+      const response = await container.getRconStatus();
+      
+      const status = await response;
       return status;
     } catch (error) {
       console.error("Failed to get status", error);
@@ -132,7 +131,8 @@ const elysiaApp = (
     const container = getMinecraftContainer();
     // lastChange: number
     // status: "running" | "stopping" | "stopped" | "healthy" | "stopped_with_code"
-    const { lastChange, status } = await container.getState();
+    const { lastChange } = await container.getState();
+    const status = await container.getStatus();
     return { lastChange, status };
   })
 
@@ -162,8 +162,8 @@ const elysiaApp = (
       
       // If env present, require server stopped
       if (env !== undefined) {
-        const state = await container.getState();
-        if (state.status !== 'stopped') {
+        const state = await container.getStatus();
+        if (state !== 'stopped') {
           return { success: false, error: "Server must be stopped to change plugin environment variables" };
         }
         await container.setPluginEnv({ filename, env });
@@ -190,8 +190,11 @@ const elysiaApp = (
   .post("/shutdown", async () => {
     try {
       const container = getMinecraftContainer();
+      console.error("Shutting down container");
       await container.stop();
-      container.getState();
+      console.error("Container shut down");
+      const state = await container.getStatus();
+      console.error("Container state:", state);
       
       return { success: true };
     } catch (error) {
@@ -225,6 +228,7 @@ export default {
     
     // Handle WebSocket
     if(url.protocol.startsWith('ws') || url.pathname.startsWith('/ws')) {
+      console.error("Handling WebSocket request");
       return this.handleWebSocket(request, env);
     }
     
@@ -252,6 +256,7 @@ export default {
       const token = url.searchParams.get('token');
       
       if (!token) {
+        console.error("WebSocket token required");
         return new Response(JSON.stringify({ error: "WebSocket token required" }), {
           status: 401,
           headers: { "Content-Type": "application/json" }
@@ -261,6 +266,7 @@ export default {
       try {
         const symKey = await getSymKeyCached(request);
         if (!symKey) {
+          console.error("Authentication not configured");
           return new Response(JSON.stringify({ error: "Authentication not configured" }), {
             status: 401,
             headers: { "Content-Type": "application/json" }
@@ -269,6 +275,7 @@ export default {
         
         const payload = await decryptToken(symKey, token);
         if (!payload || payload.exp <= Math.floor(Date.now() / 1000)) {
+          console.error("Invalid or expired WebSocket token");
           return new Response(JSON.stringify({ error: "Invalid or expired WebSocket token" }), {
             status: 401,
             headers: { "Content-Type": "application/json" }

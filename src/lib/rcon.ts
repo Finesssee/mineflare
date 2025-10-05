@@ -319,9 +319,9 @@ class Rcon {
         }
       }
       else {
-        console.log("unhandled type", type);
+        console.error("unhandled type", type);
         let str = data.toString('utf8', 12, 12 + bodyLen);
-        console.log("unhandled data", str);
+        console.error("unhandled data", str);
       }
 
       data = data.slice(packetLen);

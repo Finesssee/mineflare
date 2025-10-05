@@ -12,7 +12,7 @@
     "predeploy": "find dist/client -mindepth 1 ! -name 'mineflare-social.png' -delete",
     "deploy": "alchemy deploy --env-file .env",
     "destroy": "alchemy destroy --env-file .env",
-    "dev": "alchemy dev --env-file .env",
+    "dev": "./container_src/build-proxy.sh && alchemy dev --env-file .env",
     "dev:spa": "vite"
   },
   "devDependencies": {
