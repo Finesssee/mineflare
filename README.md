@@ -146,8 +146,8 @@ Instructions coming soon....
 # Build worker code
 bun run build
 
-# Build HTTP proxy binary
-./container_src/build-proxy.sh
+# Build container services including HTTP proxy binary and File server binary
+./container_src/build-container-services.sh
 
 # Destroy deployed resources
 bun run destroy

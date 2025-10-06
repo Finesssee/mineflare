@@ -68,6 +68,24 @@ else
 fi
 
 echo ""
+echo "=== Downloading hteetp install script ==="
+echo ""
+
+# Try to download hteetp install script from GitHub
+if curl -fsSL https://raw.githubusercontent.com/eastlondoner/hteetp/main/install.sh -o hteetp-install.sh; then
+    echo "✓ Downloaded hteetp install script from raw.githubusercontent.com"
+elif curl -fsSL https://github.com/eastlondoner/hteetp/raw/main/install.sh -o hteetp-install.sh; then
+    echo "✓ Downloaded hteetp install script from github.com"
+else
+    echo "✗ Failed to download hteetp install script!"
+    exit 1
+fi
+
+chmod +x hteetp-install.sh
+ls -lh ./hteetp-install.sh
+
+echo ""
 echo "All binaries built successfully!"
 echo "  - http-proxy-x64, http-proxy-arm64"
 echo "  - file-server-x64, file-server-arm64"
+echo "  - hteetp-install.sh"
