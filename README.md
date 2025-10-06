@@ -4,11 +4,11 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/eastlondoner/mineflare)
 
-A serverless Minecraft server hosting platform built on Cloudflare's edge infrastructure. Run a fully-featured Minecraft server with real-time monitoring, authentication, and plugin management—all powered by Cloudflare Workers and Containers.
+Run a full Minecraft Java server on the edge with real-time monitoring, authentication, and plugin management powered by Cloudflare Workers and Containers.
 
 <img width="2052" height="2110" alt="image" src="https://github.com/user-attachments/assets/e02f9313-fe90-4c43-adb8-cec7dbb8b14c" />
 
-🎮 You get a single `standard-4` container with 4 vCPUs, 12 GiB of memory and 20 GB of storage, enough to comfortably accomodate 20 players.
+🎮 You get a single Cloudflare `standard-4` container with 4 vCPUs, 12 GiB of memory and 20 GB of storage, enough to comfortably accomodate 20 players.
 💵 This costs approximately 50 cents per hour to run on Cloudflare. The server automatically shuts down after 20 minutes of inactivity to save costs, your maps and plugin configurations are saved to R2 storage and restored when you start the server again.
 
 ⚠️ I am not responsible for any costs associated with running this server! Leaving a Container running 24/7 can cost you $100s per month 💸
