@@ -26,6 +26,8 @@ The Cloudflare free tier is not supported for Containers so you have an account 
 7. Follow the playit.gg server address shown in the plugin panel to connect to your server via playit.gg
 8. Use your playit.gg server address `<some-name>.gl.joinmc.link` to connect to your Cloudflare Minecraft server
 
+<img width="850" height="475" alt="image" src="https://github.com/user-attachments/assets/2af59c0c-c5e0-485f-b8ba-1af472dd9094" />
+
 
 ## ✨ Features
 
