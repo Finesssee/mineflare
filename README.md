@@ -20,6 +20,8 @@ Run a full Minecraft Java server on the edge with real-time monitoring, authenti
 Click on the Deploy to Cloudflare button above to deploy to Cloudflare.
 The Cloudflare free tier is not supported for Containers so you have an account on the $5/month Cloudflare paid plan (or higher) to deploy.
 
+<img width="1706" height="1011" alt="image" src="https://github.com/user-attachments/assets/fccc7b6c-b690-46af-a05d-b201bef459f4" />
+
 ### First-Time Setup
 
 1. Navigate to your deployed worker URL
