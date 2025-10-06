@@ -558,8 +558,7 @@ start_tailscale
 
 # Configure Dynmap if R2 credentials are available
 write_status "Configuring Dynmap"
-# configure_dynmap
-
+configure_dynmap
 
 # Restore from backups before starting Minecraft server
 write_status "Checking for backups to restore"
