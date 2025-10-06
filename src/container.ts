@@ -489,7 +489,6 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
 
   public async getStatus(): Promise<'running' | 'stopping' | 'stopped' | 'starting'> {
     const state = await this.getState();
-    console.error("getState: " + JSON.stringify(state));
     const status = state.status;
     if(status === 'stopped_with_code') {
       this.stopping = false;
@@ -2013,7 +2012,7 @@ class HTTPProxyControl {
   }
 
   private async sendHTTPResponse(channel: DataChannelState, response: Response) {
-    console.error("Sending HTTP response:", response);
+    console.debug("Sending HTTP response:", response);
     if (!channel.writer) {
       throw new Error("Channel writer not available");
     }
@@ -2038,19 +2037,18 @@ class HTTPProxyControl {
       const headerLine = `Content-Length: 0\r\n`;
       await channel.writer.write(new TextEncoder().encode(headerLine));
     }
-    console.error("Sent headers");
+    console.debug("Sent headers");
 
     // End headers
     await channel.writer.write(new TextEncoder().encode('\r\n'));
-    console.error("Sent end headers");
+    console.debug("Sent end headers");
 
     // Send body
     if (response.body) {
-      console.error("Sending body");
+      console.debug("Sending body");
       const reader = response.body.getReader();
       try {
         while (true) {
-          console.error("Sending body chunk");
           const { done, value } = await reader.read();
           if (done) break;
           await channel.writer.write(value);
@@ -2060,7 +2058,7 @@ class HTTPProxyControl {
       }
     }
 
-    console.error(`Sent HTTP response for data channel ${channel.port}`);
+    console.debug(`Sent HTTP response for data channel ${channel.port}`);
   }
 
   private async sendErrorResponse(channel: DataChannelState, error: string) {

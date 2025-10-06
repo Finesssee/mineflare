@@ -48,7 +48,7 @@ export function App() {
     }}>
       {/* Hero Section */}
       <div style={{
-        maxWidth: '1200px',
+        maxWidth: '1600px',
         margin: '0 auto',
         padding: '60px 20px 40px',
         textAlign: 'center',
@@ -446,33 +446,37 @@ export function App() {
 
       {/* Main Content */}
       <div style={{
-        maxWidth: '1200px',
+        maxWidth: '1600px',
         margin: '0 auto',
         padding: '0 20px 60px',
       }}>
-        {/* First Row: Server Status and Server Plugins (50/50) */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, 1fr)',
-          gap: '24px',
-          marginBottom: '24px',
-        }}>
+        <style>{`
+          .responsive-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 24px;
+          }
+          
+          @media (max-width: 920px) {
+            .responsive-grid {
+              grid-template-columns: 1fr;
+            }
+          }
+        `}</style>
+        
+        {/* Grid container for aligned columns */}
+        <div className="responsive-grid">
+          {/* First Row: Server Status and Server Plugins (50/50) */}
           <ServerStatus status={status} info={info} serverState={serverState} />
           <Plugins serverState={serverState} onPluginToggle={togglePlugin} />
-        </div>
-
-        {/* Second Row: Session Timer and Players Online (50/50) */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, 1fr)',
-          gap: '24px',
-          marginBottom: '24px',
-        }}>
+          
+          {/* Second Row: Session Timer and Players Online (50/50) */}
           <SessionTimer serverState={serverState} />
           <PlayerList players={players} />
         </div>
 
-        {/* Third Row: Terminal (full width) */}
+        {/* Terminal (full width) */}
         <Terminal serverState={serverState} />
       </div>
 

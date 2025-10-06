@@ -25,7 +25,7 @@ export function Minimap({ serverState }: MinimapProps) {
   // Check if mobile on mount and window resize
   useEffect(() => {
     const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
+      setIsMobile(window.innerWidth < 920);
     };
     
     checkMobile();
