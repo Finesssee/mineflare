@@ -68,24 +68,50 @@ else
 fi
 
 echo ""
-echo "=== Downloading hteetp install script ==="
+echo "=== Downloading hteetp binaries ==="
 echo ""
 
-# Try to download hteetp install script from GitHub
-if curl -fsSL https://raw.githubusercontent.com/eastlondoner/hteetp/main/install.sh -o hteetp-install.sh; then
-    echo "✓ Downloaded hteetp install script from raw.githubusercontent.com"
-elif curl -fsSL https://github.com/eastlondoner/hteetp/raw/main/install.sh -o hteetp-install.sh; then
-    echo "✓ Downloaded hteetp install script from github.com"
-else
-    echo "✗ Failed to download hteetp install script!"
+REPO="eastlondoner/hteetp"
+
+# Get latest version from GitHub API
+echo "Getting latest hteetp version..."
+VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+
+if [ -z "$VERSION" ]; then
+    echo "✗ Failed to get latest hteetp version!"
     exit 1
 fi
 
-chmod +x hteetp-install.sh
-ls -lh ./hteetp-install.sh
+echo "Latest hteetp version: $VERSION"
+
+# Download linux-x64 binary
+echo "Downloading hteetp-linux-x64..."
+DOWNLOAD_URL_X64="https://github.com/$REPO/releases/download/$VERSION/hteetp-linux-x64.gz"
+if curl -L -o hteetp-linux-x64.gz "$DOWNLOAD_URL_X64"; then
+    echo "✓ Downloaded hteetp-linux-x64.gz"
+    gunzip -f hteetp-linux-x64.gz
+    chmod +x hteetp-linux-x64
+    ls -lh ./hteetp-linux-x64
+else
+    echo "✗ Failed to download hteetp-linux-x64!"
+    exit 1
+fi
+
+# Download linux-arm64 binary
+echo "Downloading hteetp-linux-arm64..."
+DOWNLOAD_URL_ARM64="https://github.com/$REPO/releases/download/$VERSION/hteetp-linux-arm64.gz"
+if curl -L -o hteetp-linux-arm64.gz "$DOWNLOAD_URL_ARM64"; then
+    echo "✓ Downloaded hteetp-linux-arm64.gz"
+    gunzip -f hteetp-linux-arm64.gz
+    chmod +x hteetp-linux-arm64
+    ls -lh ./hteetp-linux-arm64
+else
+    echo "✗ Failed to download hteetp-linux-arm64!"
+    exit 1
+fi
 
 echo ""
-echo "All binaries built successfully!"
+echo "All binaries built/downloaded successfully!"
 echo "  - http-proxy-x64, http-proxy-arm64"
 echo "  - file-server-x64, file-server-arm64"
-echo "  - hteetp-install.sh"
+echo "  - hteetp-linux-x64, hteetp-linux-arm64"

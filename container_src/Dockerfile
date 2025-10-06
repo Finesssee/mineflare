@@ -34,20 +34,20 @@ COPY http-proxy-x64 /usr/local/bin/http-proxy-x64
 COPY http-proxy-arm64 /usr/local/bin/http-proxy-arm64
 COPY file-server-x64 /usr/local/bin/file-server-x64
 COPY file-server-arm64 /usr/local/bin/file-server-arm64
-COPY hteetp-install.sh /tmp/hteetp-install.sh
+COPY hteetp-linux-x64 /usr/local/bin/hteetp-linux-x64
+COPY hteetp-linux-arm64 /usr/local/bin/hteetp-linux-arm64
 RUN chmod +x /usr/local/bin/start-with-services.sh \
     && chmod +x /usr/local/bin/http-proxy-x64 \
     && chmod +x /usr/local/bin/http-proxy-arm64 \
     && chmod +x /usr/local/bin/file-server-x64 \
     && chmod +x /usr/local/bin/file-server-arm64 \
-    && chmod +x /tmp/hteetp-install.sh \
+    && chmod +x /usr/local/bin/hteetp-linux-x64 \
+    && chmod +x /usr/local/bin/hteetp-linux-arm64 \
     && mkdir -p /run/tailscale \
     && chown -R 1000:1000 /data \
     && chown -R 1000:1000 /run/tailscale
 
 USER 1000:1000
-
-RUN sudo bash /tmp/hteetp-install.sh && sudo rm /tmp/hteetp-install.sh
 
 EXPOSE 8080 8081 8082 8083 8084 8085 8086 8087 8088 8089 8090 8091 8092 8093 8094 8095 8096 8097 8098 8099 8100 8101 8102 8103 8104 8105 8106 8107 8108 8109 8114 25575
 
