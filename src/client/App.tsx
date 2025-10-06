@@ -458,17 +458,9 @@ export function App() {
             margin-bottom: 24px;
           }
           
-          .responsive-grid > *:nth-child(3):last-child {
-            grid-column: 1 / -1;
-          }
-          
           @media (max-width: 920px) {
             .responsive-grid {
               grid-template-columns: 1fr;
-            }
-            
-            .responsive-grid > *:nth-child(3):last-child {
-              grid-column: auto;
             }
           }
         `}</style>
@@ -479,8 +471,8 @@ export function App() {
           <ServerStatus status={status} info={info} serverState={serverState} startupStep={startupStep} />
           <Plugins plugins={plugins} serverState={serverState} onPluginToggle={togglePlugin} />
           
-          {/* Second Row: Session Timer (debug only) and Players Online */}
-          {isDebugMode && <SessionTimer serverState={serverState} />}
+          {/* Second Row: Session Timer and Players Online (50/50) */}
+          <SessionTimer serverState={serverState} />
           <PlayerList players={players} />
         </div>
 
