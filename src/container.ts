@@ -34,6 +34,11 @@ const PLUGIN_SPECS = [
     displayName: 'DynMap',
     requiredEnv: [] as Array<{ name: string; description: string }>,
     getStatus: async (container: MinecraftContainer): Promise<PluginStatus> => {
+      const status = await container.getStatus();
+      // we can't talk to the container if it's not running
+      if(status !== 'running') {
+        return { type: "no message" };
+      }
       return { type: "information", message: "Map rendering is active" };
     },
   },
@@ -46,7 +51,7 @@ const PLUGIN_SPECS = [
       const status = await container.getStatus();
       // we can't talk to the container if it's not running
       if(status !== 'running') {
-        return { type: "warning", message: "connecting..." };
+        return { type: "no message" };
       }
       
       // need to read in the playit.gg config file
