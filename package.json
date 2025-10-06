@@ -9,7 +9,7 @@
     "configure": "alchemy configure",
     "version": "alchemy --version",
     "login": "alchemy login",
-    "predeploy": "find dist/client -mindepth 1 ! -name 'mineflare-social.png' -delete",
+    "predeploy": "touch dist/client/index.html && find dist/client -mindepth 1 ! -name 'mineflare-social.png' -delete",
     "deploy": "touch .env && alchemy deploy --env-file .env",
     "destroy": "touch .env && alchemy destroy --env-file .env",
     "dev": "touch .env && ./container_src/build-proxy.sh && alchemy dev --env-file .env",
