@@ -6,11 +6,12 @@
 
 A serverless Minecraft server hosting platform built on Cloudflare's edge infrastructure. Run a fully-featured Minecraft server with real-time monitoring, authentication, and plugin management—all powered by Cloudflare Workers and Containers.
 
+<img width="2052" height="2110" alt="image" src="https://github.com/user-attachments/assets/e02f9313-fe90-4c43-adb8-cec7dbb8b14c" />
+
 🎮 You get a single `standard-4` container with 4 vCPUs, 12 GiB of memory and 20 GB of storage, enough to comfortably accomodate 20 players.
 💵 This costs approximately 50 cents per hour to run on Cloudflare. The server automatically shuts down after 20 minutes of inactivity to save costs, your maps and plugin configurations are saved to R2 storage and restored when you start the server again.
 
 ⚠️ I am not responsible for any costs associated with running this server! Leaving a Container running 24/7 can cost you $100s per month 💸
-
 
 ## 🚀 Quick Start
 
@@ -27,6 +28,7 @@ The Cloudflare free tier is not supported for Containers so you have an account 
 6. Wait 2-3 minutes for the server to fully initialize
 7. Follow the playit.gg server address shown in the plugin panel to connect to your server via playit.gg
 8. Use your playit.gg server address `<some-name>.gl.joinmc.link` to connect to your Cloudflare Minecraft server
+<img width="795" height="490" alt="image" src="https://github.com/user-attachments/assets/303c4a07-8411-4487-acce-9ee23dfef526" />
 
 <img width="850" height="475" alt="image" src="https://github.com/user-attachments/assets/2af59c0c-c5e0-485f-b8ba-1af472dd9094" />
 
