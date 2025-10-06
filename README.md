@@ -4,46 +4,74 @@
 
 A serverless Minecraft server hosting platform built on Cloudflare's edge infrastructure. Run a fully-featured Minecraft server with real-time monitoring, authentication, and plugin management—all powered by Cloudflare Workers and Containers.
 
+🎮 You get a single `standard-4` container with 4 vCPUs, 12 GiB of memory and 20 GB of storage, enough to comfortably accomodate 20 players.
+💵 This costs approximately 50 cents per hour to run on Cloudflare. The server automatically shuts down after 20 minutes of inactivity to save costs, your maps and plugin configurations are saved to R2 storage and restored when you start the server again.
+
+⚠️ I am not responsible for any costs associated with running this server! Leaving a Container running 24/7 can cost you $100s per month 💸
+
+
+## 🚀 Quick Start
+
+Click on the Deploy to Cloudflare button above to deploy to Cloudflare.
+The Cloudflare free tier is not supported for Containers so you have an account on the $5/month Cloudflare paid plan (or higher) to deploy.
+
+### First-Time Setup
+
+1. Navigate to your deployed worker URL
+2. Click "Set Password" to secure your Server with a password
+3. Login with your credentials
+4. Click "Start Server" to launch the Minecraft container
+5. While you're waiting for the server to start up head over to https://playit.gg/ and sign up for a free account. DO NOT create an agent or a tunnel in playit.gg, this will be done automatically for you in step 6.
+6. Wait 2-3 minutes for the server to fully initialize
+7. Follow the playit.gg server address shown in the plugin panel to connect to your server via playit.gg
+8. Use your playit.gg server address `<some-name>.gl.joinmc.link` to connect to your Cloudflare Minecraft server
+
+
 ## ✨ Features
 
-- **🚀 Serverless Infrastructure** - Built on Cloudflare Workers and Durable Objects
+- **🚀 Serverless Infrastructure** - Built on Cloudflare Workers, Containers, Durable Objects and R2
 - **🎮 Full Minecraft Server** - Paper server with plugin support
-- **🗺️ Live Map** - Integrated Dynmap with R2-backed tile storage
+- **🗺️ Live Mini-Map** - Integrated web Mini-Map on R2 storage
 - **🔐 Authentication** - Secure cookie-based auth with encrypted tokens
-- **💻 Web Terminal** - Real-time RCON console via WebSocket
+- **💻 Web Terminal** - Real-time Minecrat control console via WebSocket
 - **🔌 Plugin Management** - Enable/disable plugins through web UI
 - **💤 Auto-Sleep** - Containers sleep after 20 minutes of inactivity to save resources
 - **📊 Real-time Monitoring** - Server status, player list, and performance metrics
 
 ## 🏗️ Architecture
 
-```mermaid
-graph TB
-    A[Cloudflare Worker] --> B[MinecraftContainer DO]
-    B --> C[Docker Container]
-    C --> D[Paper Minecraft Server]
-    C --> E[HTTP Proxy]
-    C --> F[Dynmap Plugin]
-    E --> G[R2 Bucket]
-    F --> G
-    H[Dynmap Worker] --> G
-    I[Frontend SPA] --> A
-```
-
 **Core Components:**
-- **Main Worker** (`src/worker.ts`) - Elysia-based API server
-- **MinecraftContainer** (`src/container.ts`) - Durable Object managing server lifecycle
-- **HTTP Proxy** - Custom TCP-to-HTTP bridge for R2 access from container
-- **Dynmap Worker** - Separate worker serving map tiles from R2
-- **Frontend** - Preact SPA with real-time updates
+- **Main Worker** (`src/worker.ts`) - Elysia API server
+- **Frontend** - Preact SPA with Eden Treaty client using polling for real-time updates
+- **MinecraftContainer** (`src/container.ts`) - Durable Object managing server lifecycle & security
+- **HTTP Proxy** - Custom TCP-to-HTTP bridge in Bun binary allows container to securely connect to R2 via bindings (no R2 tokens needed)
+- **Dynmap Worker** - Separate worker serving Mini-Map
 
-## 🚀 Quick Start
+## Alternative Networking Options
 
-### Prerequisites
+If you do not want to use playit.gg, you can use Tailscale or Cloudflare Tunnels for super secure private networking but it's harder to share with friends.
 
-- [Bun](https://bun.sh) runtime
+### Using Tailscale for super secure private networking
+
+These instructions are only if you do not want to use playit.gg and want to use Tailscale for private networking instead.
+
+1. Disable the playit.gg plugin in the plugin panel
+2. Generate a Tailscale authentication key in your Tailscale account settings
+3. Create a TS_AUTHKEY *build* secret in your mineflare worker on Cloudflare and re-deploy your worker
+4. Look in your tailscale dashboard for a new node called "cloudchamber", grab the private IP address
+5. Create a new server in Minecraft using the address `<tailscale private ip>:8081` and connect to your Cloudflare Minecraft server
+
+### Using Cloudflare Tunnels for super secure private networking
+
+Instructions coming soon....
+
+
+## Local Development
+
+### Prerequisites for local development
+
+- [Bun](https://bun.sh) javascript runtime
 - Cloudflare account with Workers and R2 enabled
-- [Alchemy](https://alchemy.sh) CLI (for deployment)
 
 ### Development
 
@@ -51,23 +79,18 @@ graph TB
 # Install dependencies
 bun install
 
-# Start development environment
+# Start local development environment
 bun run dev
-
-# Frontend dev server (separate terminal)
-bun run dev:spa
 ```
 
-The frontend will be available at http://localhost:5173
-
-### Deployment
+### Deployment from local checkout
 
 ```bash
+# Configure alchemy
+bun run configure
+
 # Login to Alchemy
 bun run login
-
-# Configure settings (optional)
-bun run configure
 
 # Deploy to Cloudflare
 bun run deploy
@@ -76,14 +99,6 @@ bun run deploy
 After deployment, you'll receive URLs for:
 - Main worker (API and frontend)
 - Dynmap worker (map tiles)
-
-### First-Time Setup
-
-1. Navigate to your deployed worker URL
-2. Click "Set Password" to create your admin account
-3. Login with your credentials
-4. Click "Start Server" to launch the Minecraft container
-5. Wait 2-3 minutes for the server to fully initialize
 
 ## 🔧 Configuration
 
@@ -120,34 +135,8 @@ Mineflare supports optional Minecraft plugins that can be enabled/disabled via t
 - **playit.gg** - Optional tunnel service for external access
 
 **Adding Custom Plugins:**
-1. Add `.jar` file to `container_src/`
-2. Define plugin spec in `PLUGIN_SPECS` (src/container.ts)
-3. Rebuild and redeploy
 
-Plugin changes require server restart to take effect.
-
-## 🎮 Connecting to Your Server
-
-### Option 1: Tailscale (Recommended)
-Set up Tailscale VPN and connect to the server's private Tailscale IP (shown in web UI).
-
-### Option 2: playit.gg Plugin
-Enable the playit.gg plugin in the web UI to get a public tunnel address.
-
-### Server Ports
-- `25565` (or tunnel port) - Minecraft game traffic
-- `8123` - Dynmap web interface (via Dynmap worker)
-
-## 📝 API Endpoints
-
-Key endpoints:
-- `GET /api/status` - Server status and metrics
-- `POST /api/auth/login` - Authenticate user
-- `POST /api/auth/setup` - First-time password setup
-- `GET /api/players` - List online players
-- `POST /api/shutdown` - Stop server
-- `GET /api/logs` - Container logs
-- `WS /ws?token=<token>` - Terminal WebSocket
+Instructions coming soon....
 
 ## 🛠️ Development Commands
 
@@ -167,35 +156,7 @@ bun run version
 
 ## 📚 Documentation
 
-- [CLAUDE.md](CLAUDE.md) - Detailed technical documentation
-- [AGENTS.md](AGENTS.md) - Architecture and development guide
-- [DYNMAP_PLAN.md](DYNMAP_PLAN.md) - Dynmap implementation details
-- [R2_IMPLEMENTATION.md](R2_IMPLEMENTATION.md) - R2 storage integration
-
-## 🏛️ Architecture Details
-
-### Authentication
-- Cookie-based sessions with encrypted tokens
-- PBKDF2 password hashing with salt
-- AES-GCM symmetric encryption
-- 7-day session expiry
-
-### Storage
-- **Durable Object SQL** - Plugin state, auth credentials, symmetric keys
-- **R2 Bucket** - Dynmap tiles with 12-hour lifecycle
-- **Worker Cache** - Cached auth state to reduce DO wakeups
-
-### Container Lifecycle
-1. Worker calls `container.start()`
-2. Docker container starts, waits for ports
-3. RCON connection initializes
-4. HTTP proxy connects
-5. Minecraft server loads
-6. Auto-sleep after 20 minutes of inactivity
-
-## 🤝 Contributing
-
-Contributions welcome! Please read the development documentation in [CLAUDE.md](CLAUDE.md) before submitting PRs.
+- [CLAUDE.md](CLAUDE.md) - AI generated technical documentation
 
 ## 📄 License
 
@@ -208,14 +169,13 @@ MIT License - see LICENSE file for details
 - [itzg/minecraft-server](https://github.com/itzg/docker-minecraft-server) - Docker Minecraft server
 - [Dynmap](https://github.com/webbukkit/dynmap) - Live mapping plugin
 - [Paper](https://papermc.io) - High-performance Minecraft server
+- [Bun](https://bun.sh) - JavaScript runtime
 
 ## ⚠️ Important Notes
 
-- Container costs may apply based on usage (check Cloudflare pricing)
+- Container costs can be significant including CPU, memory, storage and network egress costs. These will apply based on usage (check Cloudflare pricing, leaving a cloudflare container running 24/7 can cost you $100s per month)
 - R2 storage has minimal costs (generous free tier)
 - Workers have generous free tier (100k requests/day)
-- Container sleeps automatically to minimize costs
-- First container start may take 2-3 minutes
 
 ## 📞 Support
 
