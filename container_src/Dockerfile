@@ -45,7 +45,7 @@ RUN chmod +x /usr/local/bin/start-with-services.sh \
 
 USER 1000:1000
 
-RUN sudo curl -fsSL https://raw.githubusercontent.com/eastlondoner/hteetp/main/install.sh | sh
+RUN sudo bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/eastlondoner/hteetp/main/install.sh | sudo sh || curl -fsSL https://github.com/eastlondoner/hteetp/raw/main/install.sh | sudo sh'
 
 EXPOSE 8080 8081 8082 8083 8084 8085 8086 8087 8088 8089 8090 8091 8092 8093 8094 8095 8096 8097 8098 8099 8100 8101 8102 8103 8104 8105 8106 8107 8108 8109 8114 25575
 
