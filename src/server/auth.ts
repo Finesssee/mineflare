@@ -70,11 +70,13 @@ function parseCookie(cookieHeader: string | null): Record<string, string> {
 }
 
 function buildSetCookie(value: string, maxAge: number): string {
-  return `${AUTH_COOKIE_NAME}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+  const secureFlag = getNodeEnv() === 'production' ? 'Secure; ' : '';
+  return `${AUTH_COOKIE_NAME}=${value}; HttpOnly; ${secureFlag}SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 }
 
 function buildClearCookie(): string {
-  return `${AUTH_COOKIE_NAME}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+  const secureFlag = getNodeEnv() === 'production' ? 'Secure; ' : '';
+  return `${AUTH_COOKIE_NAME}=; HttpOnly; ${secureFlag}SameSite=Lax; Path=/; Max-Age=0`;
 }
 
 async function getPasswordSetCached(request: Request): Promise<boolean> {
