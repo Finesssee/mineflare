@@ -245,7 +245,7 @@ export function useServerData(isAuthenticated: boolean) {
       if (activeFetches.current.size === 0) {
         poll();
       }
-    }, 10000);
+    }, 5000);
 
     return () => {
       clearInterval(pollInterval);

@@ -549,20 +549,20 @@ start_file_server
 write_status "Starting HTTP proxy"
 start_http_proxy
 
-# Install optional plugins
-write_status "Installing optional plugins"
-do_optional_plugins || true
-
 # Start Tailscale in background
 start_tailscale
-
-# Configure Dynmap if R2 credentials are available
-write_status "Configuring Dynmap"
-configure_dynmap
 
 # Restore from backups before starting Minecraft server
 write_status "Checking for backups to restore"
 restore_from_backup || (sleep 15 && restore_from_backup)
+
+# Install optional plugins
+write_status "Installing optional plugins"
+do_optional_plugins || true
+
+# Configure Dynmap if R2 credentials are available
+write_status "Configuring Dynmap"
+configure_dynmap
 
 echo "Services started, launching main application..."
 echo "Command: $@"
