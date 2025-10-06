@@ -1,4 +1,4 @@
-<img width="1200" height="630" alt="image" src="https://github.com/user-attachments/assets/3527300e-a3a8-43af-947b-a10e3a5962a0" />
+
 
 # Mineflare ⛏️☁️
 
@@ -45,6 +45,8 @@ The Cloudflare free tier is not supported for Containers so you have an account 
 - **🔌 Plugin Management** - Enable/disable plugins through web UI
 - **💤 Auto-Sleep** - Containers sleep after 20 minutes of inactivity to save resources
 - **📊 Real-time Monitoring** - Server status, player list, and performance metrics
+
+<img width="1200" height="630" alt="image" src="https://github.com/user-attachments/assets/3527300e-a3a8-43af-947b-a10e3a5962a0" />
 
 ## 🏗️ Architecture
 
