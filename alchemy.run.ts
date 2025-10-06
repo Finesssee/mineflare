@@ -2,13 +2,13 @@
 
 import alchemy from "alchemy";
 import { RandomString } from "alchemy/random";
-import { Container, R2Bucket, BunSPA, AccountApiToken, Worker } from "alchemy/cloudflare";
+import { Container, R2Bucket, BunSPA, Worker } from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { MinecraftContainer } from "./src/container.ts";
 
 const app = await alchemy("cloudflare-container", {
-  stateStore: (scope) => new SQLiteStateStore(scope),
-  password: process.env.ALCHEMY_PASSWORD,
+  stateStore: (scope) => new CloudflareStateStore(scope),
+  password: process.env.ALCHEMY_PASSWORD ?? "minecraft-on-cloudflare-is-awesome-this-is-used-to-encrypt-secrets-stored-in-cloudflare-state-but-we-dont-have-any-sensitive-secrets-so-its-fine-to-use-this-password",
 });
 
 export const container = await Container<MinecraftContainer>("container3", {
