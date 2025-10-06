@@ -2,7 +2,7 @@
 
 # Mineflare ⛏️☁️
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/eastlondoner/mineflare)
+[![Deploy to Cloudflare](https://github.com/user-attachments/assets/9d6358a5-2b85-4974-9adb-bd157c311b1f)](https://deploy.workers.cloudflare.com/?url=https://github.com/eastlondoner/mineflare)
 
 Run a full Minecraft Java server on the edge with real-time monitoring, authentication, and plugin management powered by Cloudflare Workers and Containers.
 
