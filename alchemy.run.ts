@@ -5,7 +5,7 @@ import { CloudflareStateStore } from "alchemy/state";
 import { Container, R2Bucket, BunSPA, Worker } from "alchemy/cloudflare";
 import { MinecraftContainer } from "./src/container.ts";
 
-const app = await alchemy("cloudflare-container", {
+const app = await alchemy(process.env.WRANGLER_CI_OVERRIDE_NAME ?? "mineflare", {
   stateStore: (scope) => new CloudflareStateStore(scope, {
     forceUpdate: process.env.ALCHEMY_CF_STATE_FORCE_UPDATE?.toLowerCase() === "true",
     stateToken: alchemy.secret(process.env.ALCHEMY_STATE_TOKEN ?? "minecraft-on-cloudflare-is-awesome-this-is-used-to-encrypt-state-stored-in-cloudflare-but-we-dont-have-any-sensitive-secrets-so-its-fine-to-use-this-token"),
@@ -28,7 +28,7 @@ export const container = await Container<MinecraftContainer>("container3", {
 
 // R2 bucket for Dynmap tiles and web UI
 const dynmapBucket = await R2Bucket("dynmap-tiles", {
-  name: `${app.name}-dynmap`,
+  name: `${app.name}-dynmap-public`,
   dev: {
     remote: true,
   },
@@ -63,8 +63,8 @@ const dynmapBucket = await R2Bucket("dynmap-tiles", {
 });
 
 // R2 bucket for Server game data
-const dataBucket = await R2Bucket("data-backups-bucket", {
-  name: `${app.name}-data-backups`,
+const dataBucket = await R2Bucket("data-private-bucket", {
+  name: `${app.name}-private-data`,
   dev: {
     remote: true,
   },
@@ -88,7 +88,7 @@ const dataBucket = await R2Bucket("data-backups-bucket", {
 // });
 
 export const dynmapWorker = await Worker("dynmap-worker", {
-  name: `${app.name}-dynmap-worker`,
+  name: `${app.name}-dynmap-public`,
   entrypoint: "src/dynmap-worker.ts",
   adopt: true,
   bindings: {
@@ -98,8 +98,8 @@ export const dynmapWorker = await Worker("dynmap-worker", {
   },
 });
 
-export const worker = await BunSPA("minecraft-site", {
-  name: `${app.name}-worker`,
+export const worker = await BunSPA("mineflare-main-worker", {
+  name: app.name,
   entrypoint: "src/worker.ts",
   frontend: "index.html",
   adopt: true,
