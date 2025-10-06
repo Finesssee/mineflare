@@ -7,8 +7,10 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { MinecraftContainer } from "./src/container.ts";
 
 const app = await alchemy("cloudflare-container", {
-  stateStore: (scope) => new CloudflareStateStore(scope),
-  password: process.env.ALCHEMY_PASSWORD ?? "minecraft-on-cloudflare-is-awesome-this-is-used-to-encrypt-secrets-stored-in-cloudflare-state-but-we-dont-have-any-sensitive-secrets-so-its-fine-to-use-this-password",
+  stateStore: (scope) => new CloudflareStateStore(scope, {
+    stateToken: alchemy.secret(process.env.ALCHEMY_STATE_TOKEN ?? "minecraft-on-cloudflare-is-awesome-this-is-used-to-encrypt-state-stored-in-cloudflare-but-we-dont-have-any-sensitive-secrets-so-its-fine-to-use-this-token"),
+  }),
+  password: process.env.ALCHEMY_PASSWORD ?? "minecraft-on-cloudflare-is-awesome-this-is-used-to-encrypt-secrets-stored-locally-but-we-dont-have-any-so-its-fine-to-use-this-password",
 });
 
 export const container = await Container<MinecraftContainer>("container3", {
