@@ -16,7 +16,9 @@ bun.lockb
 dist/
 build/
 *.tsbuildinfo
+container_src/http-proxy
 container_src/http-proxy-*
+container_src/file-server
 container_src/file-server-*
 
 # Runtime data
