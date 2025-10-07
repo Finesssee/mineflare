@@ -54,7 +54,17 @@ const dynmapBucket = await R2Bucket("dynmap-tiles", {
       },
       deleteObjectsTransition: {
         condition: {
-          maxAge: 60 * 60 * 12, // 12 hours
+          maxAge: 60 * 60 * 24, // 24 hours because any less looks like "0 days" in the cloudflare UI
+          type: "Age",
+        }
+      }
+    },
+    {
+      id: "delete-mp-uploads",
+      enabled: true,
+      abortMultipartUploadsTransition: {
+        condition: {
+          maxAge: 60 * 60 * 24, // 24 hours because any less looks like "0 days" in the cloudflare UI
           type: "Age",
         }
       }
