@@ -177,7 +177,7 @@ MIT License - see LICENSE file for details
 ## 🙏 Acknowledgments
 
 - [Cloudflare Workers](https://workers.cloudflare.com) - Serverless platform
-- [Alchemy](https://alchemy.sh) - Infrastructure as Code tool
+- [Alchemy](https://alchemy.run) - Infrastructure as Code tool
 - [itzg/minecraft-server](https://github.com/itzg/docker-minecraft-server) - Docker Minecraft server
 - [Dynmap](https://github.com/webbukkit/dynmap) - Live mapping plugin
 - [Paper](https://papermc.io) - High-performance Minecraft server
