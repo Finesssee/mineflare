@@ -708,7 +708,7 @@ trap handle_shutdown SIGTERM
     write_status "Minecraft server running"
     
     # Create a named pipe for this iteration
-    PIPE="/tmp/mc-output-$$-$RANDOM"
+    PIPE="/tmp/mc-output-$$-$(date +%s)"
     mkfifo "$PIPE"
     
     # Start hteetp reading from the pipe in background

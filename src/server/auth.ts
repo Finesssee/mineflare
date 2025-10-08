@@ -7,6 +7,18 @@ import { getNodeEnv } from "../client/utils/node-env";
 import { CloudflareAdapter } from "elysia/adapter/cloudflare-worker";
 import cors from "@elysiajs/cors";
 import { getMinecraftContainer } from "./get-minecraft-container";
+import { env as workerEnv } from 'cloudflare:workers'
+import type { worker } from "../../alchemy.run";
+
+const env = workerEnv as typeof worker.Env;
+
+const isResetMode = () => {
+  try {
+    return String(env.MINEFLARE_RESET_PASSWORD_MODE).toLowerCase() === 'true';
+  } catch {
+    return false;
+  }
+};
 
 const AUTH_COOKIE_NAME = 'mf_auth';
 const AUTH_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60; // 7 days
@@ -80,6 +92,11 @@ function buildClearCookie(): string {
 }
 
 async function getPasswordSetCached(request: Request): Promise<boolean> {
+  // In reset mode, bypass cache and read directly from Durable Object
+  if (isResetMode()) {
+    const container = getMinecraftContainer();
+    return await container.isPasswordSet();
+  }
   const cacheKeyReq = new Request(new URL('/__mf/password-set-v1', request.url).toString(), { method: 'GET' });
   
   // Try cache first
@@ -109,6 +126,12 @@ async function getPasswordSetCached(request: Request): Promise<boolean> {
 }
 
 async function getSymKeyCached(request: Request): Promise<string | null> {
+  // In reset mode, bypass cache and read directly from Durable Object
+  if (isResetMode()) {
+    const container = getMinecraftContainer();
+    const { symKey } = await container.getSymmetricKey();
+    return symKey ?? null;
+  }
   const cacheKeyReq = new Request(new URL('/__mf/sym-key-v1', request.url).toString(), { method: 'GET' });
   
   // Try cache first
@@ -139,6 +162,7 @@ async function getSymKeyCached(request: Request): Promise<string | null> {
 
 const corsHeaders = (request: Request): HeadersInit | null => {
     const origin = request.headers.get('Origin');
+    console.error("Origin", origin);
     if(getNodeEnv() === 'development' && origin) {
         return {
             "Access-Control-Allow-Origin": origin,
@@ -259,6 +283,10 @@ export const authApp = (
       }
       
       const container = getMinecraftContainer();
+      // If reset mode is enabled, clear existing auth to allow re-setup
+      if (isResetMode()) {
+        await container.clearAuth();
+      }
       console.log("Calling setupPassword on container...");
       const result = await container.setupPassword({ password });
       console.log("setupPassword result:", result);

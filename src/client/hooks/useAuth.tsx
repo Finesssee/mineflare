@@ -10,7 +10,7 @@ interface AuthState {
 
 export function useAuth() {
   const [state, setState] = useState<AuthState>({
-    passwordSet: true, // Default to login screen (most common case)
+    passwordSet: false,
     authenticated: false,
     loading: true,
     error: null,

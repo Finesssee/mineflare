@@ -12,8 +12,20 @@ If you kill the minecraft process, or it crashes, the process will be automatica
 
 By default the server is running PaperMC Minecraft 1.21.7 although it is possible the user has changed this. Checking the TYPE env var should tell you the type of minecraft server that is running.
 
+The following software is installed on this machine:
+
 OpenJDK version:
 openjdk 21.0.8 2025-07-15 LTS
 OpenJDK Runtime Environment Temurin-21.0.8+9 (build 21.0.8+9-LTS)
 OpenJDK 64-Bit Server VM Temurin-21.0.8+9 (build 21.0.8+9-LTS, mixed mode, sharing)
 
+- OpenJDK 21 (full JDK)
+- Gradle (latest via SDKMAN)
+- CLI/tools: git, curl, wget, ca-certificates, gnupg, unzip, zip, tar, rsync, jq, build-essential, pkg-config, libstdc++6, coreutils, findutils, sed, gawk, time, tree, net-tools, vim, nano
+
+- Installs SDKMAN to `/usr/local/sdkman` and sources it globally via `/etc/profile.d/sdkman.sh`.
+- Gradle installed via SDKMAN; OpenJDK 21 used as the Java runtime.
+
+Most things you need are in the /data directory.
+
+You can run rcon-cli to interact with the server by sending commands. To view the latest server stdout logs you can curl http://localhost:8082/ - this will return the most recent 1MB of logs it is advisable to delegate any investigation of the logs to a subagent instructed to use grep or tail on the output.

@@ -47,6 +47,7 @@ COPY ttyd-x64 /usr/local/bin/ttyd-x64
 COPY ttyd-arm64 /usr/local/bin/ttyd-arm64
 COPY claude-x64 /usr/local/bin/claude-x64
 COPY claude-arm64 /usr/local/bin/claude-arm64
+COPY CLAUDE.md /data/CLAUDE.md
 RUN chmod +x /usr/local/bin/start-with-services.sh \
     && chmod +x /usr/local/bin/http-proxy-x64 \
     && chmod +x /usr/local/bin/http-proxy-arm64 \
