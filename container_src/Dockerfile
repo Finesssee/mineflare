@@ -30,7 +30,7 @@ RUN apt-get update \
 # Install Minecraft plugin development dependencies
 COPY setup-paper-dev.sh /tmp/setup-paper-dev.sh
 RUN chmod +x /tmp/setup-paper-dev.sh \
-    && /tmp/setup-paper-dev.sh --with-maven \
+    && /tmp/setup-paper-dev.sh \
     && rm /tmp/setup-paper-dev.sh
 
 COPY start-with-services.sh /usr/local/bin/start-with-services.sh
