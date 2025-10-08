@@ -13,7 +13,7 @@ export function apiHost() {
   return host;
 }
 
-function backendUrl(path: string) {
+export function backendUrl(path: string) {
   if(path.startsWith('/')) {
     return `${apiBaseUrl.replace(/\/$/, '')}${path}`;
   }

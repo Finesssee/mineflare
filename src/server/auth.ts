@@ -398,7 +398,7 @@ export const authApp = (
       if (!symKey) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), {
           status: 401,
-          headers: { "Content-Type": "application/json", ...corsHeaders(request) }
+          headers: { "Content-Type": "application/json" }
         });
       }
       
@@ -407,7 +407,7 @@ export const authApp = (
       if (!cookieToken) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), {
           status: 401,
-          headers: { "Content-Type": "application/json", ...corsHeaders(request) }
+          headers: { "Content-Type": "application/json" }
         });
       }
       
@@ -415,7 +415,7 @@ export const authApp = (
       if (!cookiePayload || cookiePayload.exp <= Math.floor(Date.now() / 1000)) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), {
           status: 401,
-          headers: { "Content-Type": "application/json", ...corsHeaders(request) }
+          headers: { "Content-Type": "application/json" }
         });
       }
       
@@ -430,7 +430,7 @@ export const authApp = (
       console.error("Failed to generate WebSocket token", error);
       return new Response(JSON.stringify({ error: "Failed to generate token" }), {
         status: 500,
-        headers: { "Content-Type": "application/json", ...corsHeaders(request) }
+        headers: { "Content-Type": "application/json" }
       });
     }
   })

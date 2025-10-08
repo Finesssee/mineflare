@@ -116,7 +116,7 @@ export const dynmapWorker = await Worker("dynmap-worker", {
 export const worker = await BunSPA("mineflare-main-worker", {
   name: app.name,
   entrypoint: "src/worker.ts",
-  frontend: "index.html",
+  frontend: ["index.html", "src/terminal/index.html"],
   adopt: true,
   compatibility: "node",
   compatibilityFlags: ["enable_ctx_exports"],

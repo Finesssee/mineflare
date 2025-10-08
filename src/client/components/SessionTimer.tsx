@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'preact/hooks';
+import { fetchApi } from '../utils/api';
 
 interface Props {
   serverState?: 'stopped' | 'starting' | 'running' | 'stopping';
@@ -72,9 +73,9 @@ export function SessionTimer({ serverState }: Props) {
     const fetchSessionData = async () => {
       try {
         const [currentRes, lastRes, statsRes] = await Promise.all([
-          fetch('/api/session/current'),
-          fetch('/api/session/last'),
-          fetch('/api/session/stats')
+          fetchApi('/api/session/current'),
+          fetchApi('/api/session/last'),
+          fetchApi('/api/session/stats')
         ]);
 
         const current = await currentRes.json() as { isRunning: boolean; startedAt?: number };
@@ -95,21 +96,10 @@ export function SessionTimer({ serverState }: Props) {
       }
     };
 
-    // Detect state transitions
-    const prevState = prevServerStateRef.current;
-    const transitionedToStopped = prevState !== 'stopped' && serverState === 'stopped';
-    const transitionedToRunning = prevState !== 'running' && serverState === 'running';
+    // Always fetch immediately on mount or state change
+    fetchSessionData();
     
-    let delayTimeout: number | null = null;
-    
-    // Fetch immediately on mount or when transitioning to stopped/running
-    if (!prevState || transitionedToRunning) {
-      fetchSessionData();
-    } else if (transitionedToStopped) {
-      // Add a small delay when transitioning to stopped to ensure DB is updated
-      delayTimeout = setTimeout(fetchSessionData, 500) as unknown as number;
-    }
-    
+    // Update the ref for next comparison
     prevServerStateRef.current = serverState;
 
     // Refetch every 30 seconds
@@ -117,9 +107,6 @@ export function SessionTimer({ serverState }: Props) {
     
     return () => {
       clearInterval(interval);
-      if (delayTimeout !== null) {
-        clearTimeout(delayTimeout);
-      }
     };
   }, [serverState]);
 
@@ -156,29 +143,46 @@ export function SessionTimer({ serverState }: Props) {
   }
 
   const isRunning = serverState === 'running' && sessionData?.isRunning;
+  const isStarting = serverState === 'starting';
+  const isStopping = serverState === 'stopping';
+  const isStopped = serverState === 'stopped';
+  
   const elapsedMs = isRunning && sessionData?.startedAt
     ? currentTime - sessionData.startedAt
     : 0;
   const formattedTime = isRunning ? formatElapsedTime(elapsedMs) : '00:00:00';
   const lastStopped = sessionData?.stoppedAt ? formatTimeAgo(sessionData.stoppedAt) : 'Never started';
 
+  // Determine colors based on state
+  const borderColor = isRunning 
+    ? 'rgba(85, 255, 85, 0.2)' 
+    : (isStarting || isStopping) 
+      ? 'rgba(255, 182, 0, 0.2)' 
+      : 'rgba(91, 155, 213, 0.2)';
+  
+  const borderColorHover = isRunning 
+    ? 'rgba(85, 255, 85, 0.4)' 
+    : (isStarting || isStopping) 
+      ? 'rgba(255, 182, 0, 0.4)' 
+      : 'rgba(91, 155, 213, 0.4)';
+
   return (
     <div style={{
       background: 'rgba(26, 46, 30, 0.4)',
       backdropFilter: 'blur(10px)',
-      border: `1px solid ${isRunning ? 'rgba(85, 255, 85, 0.2)' : 'rgba(91, 155, 213, 0.2)'}`,
+      border: `1px solid ${borderColor}`,
       borderRadius: '16px',
       padding: '32px',
       boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
       transition: 'all 0.3s ease',
     }}
     onMouseEnter={(e) => {
-      e.currentTarget.style.borderColor = isRunning ? 'rgba(85, 255, 85, 0.4)' : 'rgba(91, 155, 213, 0.4)';
+      e.currentTarget.style.borderColor = borderColorHover;
       e.currentTarget.style.transform = 'translateY(-4px)';
       e.currentTarget.style.boxShadow = '0 12px 40px rgba(0, 0, 0, 0.4)';
     }}
     onMouseLeave={(e) => {
-      e.currentTarget.style.borderColor = isRunning ? 'rgba(85, 255, 85, 0.2)' : 'rgba(91, 155, 213, 0.2)';
+      e.currentTarget.style.borderColor = borderColor;
       e.currentTarget.style.transform = 'translateY(0)';
       e.currentTarget.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.3)';
     }}
@@ -195,7 +199,9 @@ export function SessionTimer({ serverState }: Props) {
           borderRadius: '12px',
           background: isRunning
             ? 'linear-gradient(135deg, #55FF55 0%, #57A64E 100%)'
-            : 'linear-gradient(135deg, #5B9BD5 0%, #4A7BA7 100%)',
+            : (isStarting || isStopping)
+              ? 'linear-gradient(135deg, #FFB600 0%, #FFC933 100%)'
+              : 'linear-gradient(135deg, #5B9BD5 0%, #4A7BA7 100%)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -203,9 +209,12 @@ export function SessionTimer({ serverState }: Props) {
           marginRight: '16px',
           boxShadow: isRunning
             ? '0 4px 12px rgba(85, 255, 85, 0.3)'
-            : '0 4px 12px rgba(91, 155, 213, 0.3)',
+            : (isStarting || isStopping)
+              ? '0 4px 12px rgba(255, 182, 0, 0.3)'
+              : '0 4px 12px rgba(91, 155, 213, 0.3)',
+          animation: (isStarting || isStopping) ? 'pulse 2s ease-in-out infinite' : 'none',
         }}>
-          {isRunning ? '▶' : '⏱'}
+          {isRunning ? '▶' : (isStarting || isStopping) ? '⏳' : '⏱'}
         </div>
         <div>
           <h2 style={{
@@ -225,20 +234,30 @@ export function SessionTimer({ serverState }: Props) {
               width: '8px',
               height: '8px',
               borderRadius: '50%',
-              backgroundColor: isRunning ? '#55FF55' : '#5B9BD5',
-              boxShadow: isRunning
+              backgroundColor: isRunning 
+                ? '#55FF55' 
+                : (isStarting || isStopping) 
+                  ? '#FFB600' 
+                  : '#5B9BD5',
+              boxShadow: isRunning 
                 ? '0 0 8px #55FF55'
-                : '0 0 8px #5B9BD5',
-              animation: isRunning ? 'pulse 2s ease-in-out infinite' : 'none',
+                : (isStarting || isStopping)
+                  ? '0 0 8px #FFB600'
+                  : '0 0 8px #5B9BD5',
+              animation: (isRunning || isStarting || isStopping) ? 'pulse 2s ease-in-out infinite' : 'none',
             }} />
             <span style={{
-              color: isRunning ? '#55FF55' : '#5B9BD5',
+              color: isRunning 
+                ? '#55FF55' 
+                : (isStarting || isStopping) 
+                  ? '#FFB600' 
+                  : '#5B9BD5',
               fontWeight: '600',
               fontSize: '0.875rem',
               textTransform: 'uppercase',
               letterSpacing: '0.05em',
             }}>
-              {isRunning ? 'Running' : 'Stopped'}
+              {isRunning ? 'Running' : isStarting ? 'Starting' : isStopping ? 'Stopping' : 'Stopped'}
             </span>
           </div>
         </div>
@@ -248,8 +267,10 @@ export function SessionTimer({ serverState }: Props) {
       <div style={{
         background: isRunning
           ? 'rgba(85, 255, 85, 0.1)'
-          : 'rgba(91, 155, 213, 0.1)',
-        border: `1px solid ${isRunning ? 'rgba(85, 255, 85, 0.2)' : 'rgba(91, 155, 213, 0.2)'}`,
+          : (isStarting || isStopping)
+            ? 'rgba(255, 182, 0, 0.1)'
+            : 'rgba(91, 155, 213, 0.1)',
+        border: `1px solid ${isRunning ? 'rgba(85, 255, 85, 0.2)' : (isStarting || isStopping) ? 'rgba(255, 182, 0, 0.2)' : 'rgba(91, 155, 213, 0.2)'}`,
         borderRadius: '12px',
         padding: '24px',
         marginBottom: '16px',
@@ -263,17 +284,17 @@ export function SessionTimer({ serverState }: Props) {
           marginBottom: '12px',
           fontWeight: '600',
         }}>
-          {isRunning ? '⏱ Current Session' : '🕐 Last Stopped'}
+          {isRunning ? '⏱ Current Session' : (isStarting || isStopping) ? '⏳ Transitioning' : '🕐 Last Stopped'}
         </div>
         <div style={{
           fontSize: isRunning ? '3rem' : '1.5rem',
           fontWeight: '700',
-          color: isRunning ? '#55FF55' : '#888',
+          color: isRunning ? '#55FF55' : (isStarting || isStopping) ? '#FFB600' : '#888',
           fontFamily: 'monospace',
           letterSpacing: isRunning ? '0.1em' : '0',
           textShadow: isRunning ? '0 0 20px rgba(85, 255, 85, 0.3)' : 'none',
         }}>
-          {isRunning ? formattedTime : lastStopped}
+          {isRunning ? formattedTime : (isStarting || isStopping) ? (isStarting ? 'Starting...' : 'Stopping...') : lastStopped}
         </div>
       </div>
 

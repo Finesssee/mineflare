@@ -47,8 +47,8 @@ export default class DynmapWorker extends WorkerEntrypoint<typeof dynmapWorker.E
             return new Response(blankImage.body as unknown as ReadableStream, {
                 headers: {
                     "Content-Type": "image/png",
-                    // cache control for 10 seconds (tile caching)
-                    "Cache-Control": "public, max-age=10",
+                    // cache control for 60 seconds (tile caching)
+                    "Cache-Control": "public, max-age=60",
                     ...embedHeaders
                 }
             });

@@ -172,3 +172,4 @@ lerna-debug.log*
 .specstory/.what-is-this.md
 
 .cursor/plans
+.alchemy/

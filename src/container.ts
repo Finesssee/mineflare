@@ -1,4 +1,4 @@
-import { Container, ContainerOptions } from "@cloudflare/containers";
+import { Container, ContainerOptions, switchPort } from "@cloudflare/containers";
 import { worker } from "../alchemy.run";
 import { DurableObject } from 'cloudflare:workers';
 import type { Response as CloudflareResponse } from '@cloudflare/workers-types'
@@ -106,7 +106,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
     private lastRconSuccess: Date | null = null;
     private _isPasswordSet: boolean = false;
     // Port the container listens on (default: 8080)
-    defaultPort = 8081;
+    defaultPort = 7861;
     // Time before container sleeps due to inactivity (default: 30s)
     sleepAfter = "20m";
     
@@ -199,6 +199,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
             try {
               // In dev sometimes state lies
               await this.start();
+              await new Promise(resolve => setTimeout(resolve, 2000));
               await this.initHTTPProxy();
             } catch (error) {
               this.stop()
@@ -393,7 +394,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
             instanceGetTimeoutMS: 2000,
             portReadyTimeoutMS: 30_000
         });
-        this.ctx.waitUntil((new Promise(resolve => setTimeout(resolve, 2000))).then(() => this.initHTTPProxy()));
+        this.ctx.waitUntil((new Promise(resolve => setTimeout(resolve, 3000))).then(() => this.initHTTPProxy()));
         await portsPromise;
       } catch (error) {
         console.error("Error while starting ports but it's probably OK", error);
@@ -551,16 +552,22 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
   }
 
   public async getStatus(): Promise<'running' | 'stopping' | 'stopped' | 'starting'> {
+    const running = this._container?.running;
+
     const state = await this.getState();
     const status = state.status;
     if(status === 'stopped_with_code') {
       this.stopping = false;
       return 'stopped';
     } else if ( status === 'healthy') {
-      if(this.stopping) {
-        return 'stopping';
+      if(running) {
+        if(this.stopping) {
+          return 'stopping';
+        }
+        return 'running';
       }
-      return 'running';
+
+      return 'stopped';
     } else if (status === 'stopped') {
       this.stopping = false;
       return status;
@@ -580,6 +587,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
       }
       
       const content = await this.getFileContents("/status/step.txt");
+      console.error("startupStep", content);
       return content?.trim() ?? null;
     } catch (error) {
       // File doesn't exist yet or can't be read
@@ -781,7 +789,11 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
 
         console.error("Optional plugins", this.pluginFilenamesToEnable);
         
-        if (url.protocol.startsWith('ws') || url.pathname.startsWith('/ws')) {
+        if (url.pathname.startsWith('/src/terminal/ws')) {
+          console.error('terminal websocket');
+          return super.fetch(switchPort(request, 7681));
+        }
+        if (url.pathname.startsWith('/ws')) {
           console.error('websocket')
           // Creates two ends of a WebSocket connection.
           const webSocketPair = new WebSocketPair();
@@ -810,6 +822,22 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
 
         if (url.pathname === "/status" || url.pathname === "/startup-status") {
           const containerStatus = await this.getStatus();
+          if(containerStatus === 'stopped') {
+            return new Response(JSON.stringify({ 
+              status: containerStatus, 
+              startupStep: null 
+            }), {
+              headers: { "Content-Type": "application/json" }
+            });
+          }
+          if(containerStatus === 'stopping') {
+            return new Response(JSON.stringify({ 
+              status: containerStatus, 
+              startupStep: 'backing up world data' 
+            }), {
+              headers: { "Content-Type": "application/json" }
+            });
+          }
           const startupStep = await this.getStartupStep();
           return new Response(JSON.stringify({ 
             status: containerStatus, 
@@ -1254,7 +1282,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
           // Step 5: Always re-enable auto-saving, even if backup failed
           console.error("Re-enabling auto-save...");
           try {
-            const rcon = await this.initRcon();
+            const rcon = await this.initRcon(2);
             if (!rcon) {
               throw new Error("RCON not available - server may be offline");
             }

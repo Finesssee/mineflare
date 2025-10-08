@@ -51,7 +51,7 @@ export function Terminal({ serverState }: TerminalProps) {
     const connectWebSocket = useCallback(async () => {
         try {
             // Fetch a WebSocket token before connecting
-            const tokenResponse = await fetchApi('/api/auth/ws-token');
+            const tokenResponse = await fetchApi('/auth/ws-token');
             if (!tokenResponse.ok) {
                 console.error("Failed to get WebSocket token, status:", tokenResponse.status);
                 setChatError("Authentication failed. Please refresh the page.");

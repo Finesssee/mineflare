@@ -19,7 +19,7 @@ export function useAuth() {
   const checkStatus = useCallback(async () => {
     try {
       setState(prev => ({ ...prev, loading: true, error: null }));
-      const response = await fetchApi('/api/auth/status');
+      const response = await fetchApi('/auth/status');
       const data = await response.json() as { passwordSet: boolean; authenticated: boolean };
       setState({
         passwordSet: data.passwordSet,
@@ -41,7 +41,7 @@ export function useAuth() {
   const setup = useCallback(async (password: string): Promise<{ success: boolean; error?: string }> => {
     try {
       setState(prev => ({ ...prev, loading: true, error: null }));
-      const response = await fetchApi('/api/auth/setup', {
+      const response = await fetchApi('/auth/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
@@ -67,7 +67,7 @@ export function useAuth() {
   const login = useCallback(async (password: string): Promise<{ success: boolean; error?: string }> => {
     try {
       setState(prev => ({ ...prev, loading: true, error: null }));
-      const response = await fetchApi('/api/auth/login', {
+      const response = await fetchApi('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
@@ -93,7 +93,7 @@ export function useAuth() {
   const logout = useCallback(async () => {
     try {
       setState(prev => ({ ...prev, loading: true, error: null }));
-      await fetchApi('/api/auth/logout', { method: 'POST' });
+      await fetchApi('/auth/logout', { method: 'POST' });
       setState({
         passwordSet: true, // Password is still set, just logged out
         authenticated: false,

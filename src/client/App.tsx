@@ -7,6 +7,7 @@ import { Plugins } from './components/Plugins';
 import { Login } from './components/Login';
 import { useAuth } from './hooks/useAuth';
 import { SessionTimer } from './components/SessionTimer';
+import logo from '../../dist/client/mineflare-logo.png';
 
 try {
   if (process.env.NODE_ENV === 'development') {
@@ -54,18 +55,17 @@ export function App() {
         textAlign: 'center',
         position: 'relative',
       }}>
-        <h1 style={{
-          fontSize: 'clamp(2.5rem, 6vw, 4rem)',
-          fontWeight: '800',
-          margin: '0 0 20px 0',
-          background: 'linear-gradient(135deg, #55FF55 0%, #FFB600 50%, #57A64E 100%)',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent',
-          backgroundClip: 'text',
-          letterSpacing: '-0.02em',
-        }}>
-          Cloudflare Minecraft Server
-        </h1>
+        <img 
+          src={logo}
+          alt="Mineflare" 
+          style={{
+            maxHeight: '160px',
+            maxWidth: '80%',
+            objectFit: 'contain',
+            filter: 'drop-shadow(0 4px 12px rgba(87, 166, 78, 0.3))',
+            margin: '0 0 20px 0',
+          }}
+        />
         
         <div style={{
           display: 'flex',
@@ -75,15 +75,6 @@ export function App() {
           marginBottom: '30px',
           flexWrap: 'wrap',
         }}>
-          <p style={{
-            fontSize: 'clamp(1rem, 3vw, 1.25rem)',
-            color: '#b0b0b0',
-            fontWeight: '400',
-            margin: '0',
-            textAlign: 'center',
-          }}>
-            Real-time server monitoring and control
-          </p>
           
           {serverState === 'running' && (
             <button 
@@ -294,40 +285,70 @@ export function App() {
           </div>
         ) : null}
         
-        {/* Stop button - show when running or in debug mode */}
-        {(serverState === 'running' || isDebugMode) && (
+        {/* Terminal and Stop buttons - show when running, starting, or in debug mode */}
+        {(serverState === 'running' || serverState === 'starting' || isDebugMode) && (
           <div style={{
             position: 'absolute',
             top: '20px',
             right: '20px',
             zIndex: 10,
+            display: 'flex',
+            gap: '12px',
           }}>
             <button
-              onClick={stopServer}
-              disabled={isDebugMode ? false : loading}
+              onClick={() => window.open('/src/terminal', '_blank')}
               style={{
                 fontSize: '0.875rem',
                 fontWeight: '600',
                 padding: '8px 20px',
-                background: (isDebugMode || !loading) ? 'rgba(255, 107, 107, 0.15)' : 'rgba(255, 107, 107, 0.1)',
-                color: '#ff6b6b',
-                border: '1px solid rgba(255, 107, 107, 0.3)',
+                background: 'rgba(87, 166, 78, 0.15)',
+                color: '#57A64E',
+                border: '1px solid rgba(87, 166, 78, 0.3)',
                 borderRadius: '8px',
-                cursor: (isDebugMode || !loading) ? 'pointer' : 'default',
+                cursor: 'pointer',
                 transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                 textTransform: 'uppercase',
                 letterSpacing: '0.05em',
-                opacity: (isDebugMode || !loading) ? 1 : 0.6,
               }}
               onMouseEnter={(e) => {
-                if (isDebugMode || !loading) {
+                e.currentTarget.style.background = 'rgba(87, 166, 78, 0.25)';
+                e.currentTarget.style.borderColor = 'rgba(87, 166, 78, 0.5)';
+                e.currentTarget.style.transform = 'scale(1.05)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(87, 166, 78, 0.15)';
+                e.currentTarget.style.borderColor = 'rgba(87, 166, 78, 0.3)';
+                e.currentTarget.style.transform = 'scale(1)';
+              }}
+            >
+              🖥️ Terminal
+            </button>
+            <button
+              onClick={stopServer}
+              disabled={isDebugMode ? false : (serverState === 'starting' ? false : loading)}
+              style={{
+                fontSize: '0.875rem',
+                fontWeight: '600',
+                padding: '8px 20px',
+                background: (isDebugMode || serverState === 'starting' || !loading) ? 'rgba(255, 107, 107, 0.15)' : 'rgba(255, 107, 107, 0.1)',
+                color: '#ff6b6b',
+                border: '1px solid rgba(255, 107, 107, 0.3)',
+                borderRadius: '8px',
+                cursor: (isDebugMode || serverState === 'starting' || !loading) ? 'pointer' : 'default',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                opacity: (isDebugMode || serverState === 'starting' || !loading) ? 1 : 0.6,
+              }}
+              onMouseEnter={(e) => {
+                if (isDebugMode || serverState === 'starting' || !loading) {
                   e.currentTarget.style.background = 'rgba(255, 107, 107, 0.25)';
                   e.currentTarget.style.borderColor = 'rgba(255, 107, 107, 0.5)';
                   e.currentTarget.style.transform = 'scale(1.05)';
                 }
               }}
               onMouseLeave={(e) => {
-                if (isDebugMode || !loading) {
+                if (isDebugMode || serverState === 'starting' || !loading) {
                   e.currentTarget.style.background = 'rgba(255, 107, 107, 0.15)';
                   e.currentTarget.style.borderColor = 'rgba(255, 107, 107, 0.3)';
                   e.currentTarget.style.transform = 'scale(1)';

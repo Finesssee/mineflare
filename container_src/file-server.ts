@@ -8,9 +8,7 @@
  * Endpoints:
  * - GET /path/to/file - Serve file content
  * - GET /path/to/directory?backup=true - Create tar.gz and upload to R2
- *   Note: .jar files in plugins folders are automatically excluded from backup to save space
  * - GET /path/to/directory?restore=<backup_filename> - Fetch backup from R2 and restore to directory
- *   Note: .jar files in plugins folders are automatically excluded from restore to prevent overwriting updated plugins
  * - GET /path/to/directory?list_backups=true - List available backups for the directory
  * 
  * Why reverse-epoch filenames?
@@ -191,12 +189,20 @@ class FileServer {
     console.log(`[FileServer] Listening on ${server.hostname}:${server.port}`);
     
     // Start periodic status logger
+    // Default: 60 seconds (1 minute), configurable via STATUS_LOG_INTERVAL_SECONDS env var
+    const statusLogIntervalSeconds = process.env.STATUS_LOG_INTERVAL_SECONDS 
+      ? parseInt(process.env.STATUS_LOG_INTERVAL_SECONDS, 10) 
+      : 60;
+    const statusLogIntervalMs = statusLogIntervalSeconds * 1000;
+    
+    console.log(`[FileServer] Status logging interval: ${statusLogIntervalSeconds} seconds`);
+    
     setInterval(() => {
       const restoreStatus = self.activeRestores > 0 ? ` | Restore in progress (${self.activeRestores})` : '';
       console.log(
         `[FileServer Status] Requests: ${self.requestCount} | Backups: ${self.backupCount} | Restores: ${self.restoreCount}${restoreStatus}`
       );
-    }, 30000); // Every 30 seconds
+    }, statusLogIntervalMs);
   }
 
   private async handleRequest(req: Request): Promise<Response> {
@@ -313,7 +319,7 @@ class FileServer {
       const dirName = directory.split("/").filter(Boolean).pop() || "backup";
       const backupFilename = generateBackupKey(dirName, now);
 
-      console.log(`[FileServer] [${id}] Creating backup: ${directory} -> ${backupFilename} (excluding plugins/*.jar)`);
+      console.log(`[FileServer] [${id}] Creating backup: ${directory} -> ${backupFilename}`);
 
       // Create tar.gz archive using tar command
       const tempFile = `/tmp/backup_${formatUTCDateYYYYMMDDHH(new Date())}_${id}.tar.gz`;
@@ -323,7 +329,6 @@ class FileServer {
         tempFile,
         "-C",
         directory.substring(0, directory.lastIndexOf("/")) || "/",
-        "--exclude=*/plugins/*.jar",
         dirName,
       ]);
       const tarExit = await tarProc.exited;
@@ -356,7 +361,7 @@ class FileServer {
       //   try { await unlink(tempFile); } catch {}
       //   job.status = "success";
       //   job.completedAt = Date.now();
-      //   job.result = { backup_path: existingBackup.path, size: existingBackup.size, note: "Duplicate backup skipped (same content already exists). Plugin .jar files were excluded." };
+      //   job.result = { backup_path: existingBackup.path, size: existingBackup.size, note: "Duplicate backup skipped (same content already exists)." };
       //   this.backupJobs.set(id, job);
       //   console.log(`[FileServer] [${id}] Background backup marked success (duplicate)`);
       //   return;
@@ -377,7 +382,7 @@ class FileServer {
       console.log(`[FileServer] [${id}] Backup completed successfully`);
       job.status = "success";
       job.completedAt = Date.now();
-      job.result = { backup_path: backupFilename, size: fileSize, note: "Plugin .jar files were excluded from backup to save space" };
+      job.result = { backup_path: backupFilename, size: fileSize, note: "complete backup" };
       this.backupJobs.set(id, job);
     } catch (error: any) {
       job.status = "failed";
@@ -459,10 +464,9 @@ class FileServer {
       const dirName = directory.split("/").filter(Boolean).pop() || "backup";
       const backupFilename = generateBackupKey(dirName, now);
 
-      console.log(`[FileServer] Creating backup: ${directory} -> ${backupFilename} (excluding plugins/*.jar)`);
+      console.log(`[FileServer] Creating backup: ${directory} -> ${backupFilename}`);
 
       // Create tar.gz archive using tar command
-      // Exclude .jar files from plugins folders to save space (they won't be restored anyway)
       const tempFile = `/tmp/backup_${formatUTCDateYYYYMMDDHH(now)}.tar.gz`;
       
       const tarProc = spawn([
@@ -471,7 +475,6 @@ class FileServer {
         tempFile,
         "-C",
         directory.substring(0, directory.lastIndexOf("/")) || "/",
-        "--exclude=*/plugins/*.jar",  // Exclude all .jar files in any plugins directory
         dirName,
       ]);
 
@@ -517,7 +520,7 @@ class FileServer {
       //     success: true,
       //     backup_path: existingBackup.path,
       //     size: existingBackup.size,
-      //     note: "Duplicate backup skipped (same content already exists). Plugin .jar files were excluded.",
+      //     note: "Duplicate backup skipped (same content already exists).",
       //   };
 
       //   return this.jsonResponse(result);
@@ -546,7 +549,7 @@ class FileServer {
         success: true,
         backup_path: backupFilename,
         size: fileSize,
-        note: "Plugin .jar files were excluded from backup to save space",
+        note: "complete backup",
       };
 
       return this.jsonResponse(result);
@@ -710,8 +713,7 @@ class FileServer {
 
       // Extract tar.gz archive to the parent directory
       // The tar will create/overwrite the target directory
-      // IMPORTANT: Exclude .jar files in plugins folders to prevent overwriting manually updated plugins
-      console.log(`[FileServer] Extracting to: ${parentDir} (excluding plugins/*.jar)`);
+      console.log(`[FileServer] Extracting to: ${parentDir}`);
       
       const tarProc = spawn([
         "tar",
@@ -719,7 +721,6 @@ class FileServer {
         tempFile,
         "-C",
         parentDir,
-        "--exclude=*/plugins/*.jar",  // Exclude all .jar files in any plugins directory
       ]);
 
       const tarExit = await tarProc.exited;
@@ -729,7 +730,7 @@ class FileServer {
         throw new Error(`tar extraction failed with exit code ${tarExit}: ${stderr}`);
       }
 
-      console.log(`[FileServer] Extraction completed successfully (plugins/*.jar excluded)`);
+      console.log(`[FileServer] Extraction completed successfully`);
 
       // Clean up temp file
       try {
@@ -743,7 +744,7 @@ class FileServer {
         restored_from: backupFilename,
         restored_to: directory,
         size: downloadedSize,
-        note: "Plugin .jar files were excluded from restore to preserve manual updates",
+        note: "complete restore",
       };
 
       return this.jsonResponse(result);

@@ -247,6 +247,9 @@ const elysiaApp = (
       return { thisMonth: 0, thisYear: 0, error: "Failed to get usage stats" };
     }
   })
+  .get("/startup-status", async () => {
+    return Response.redirect("/api/status", 302);
+  })
 
   .compile()
 
@@ -254,90 +257,148 @@ const app = new Elysia({
   adapter: CloudflareAdapter,
   // aot: false,
 }).mount('/api', elysiaApp)
-  .mount('/api/auth', authApp)
+  .mount('/auth', authApp)
   .compile()
 
 export { MinecraftContainer } from "./container";
 
+/**
+ * Validates WebSocket authentication token from query parameter
+ */
+async function validateWebSocketAuth(request: Request): Promise<Response | null> {
+  const url = new URL(request.url);
+  const token = url.searchParams.get('token');
+  
+  if (!token) {
+    console.error("WebSocket token required");
+    return new Response(JSON.stringify({ error: "WebSocket token required" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  
+  try {
+    const symKey = await getSymKeyCached(request);
+    if (!symKey) {
+      console.error("Authentication not configured");
+      return new Response(JSON.stringify({ error: "Authentication not configured" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    
+    const payload = await decryptToken(symKey, token);
+    if (!payload || payload.exp <= Math.floor(Date.now() / 1000)) {
+      console.error("Invalid or expired WebSocket token");
+      return new Response(JSON.stringify({ error: "Invalid or expired WebSocket token" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    
+    // Token is valid
+    return null;
+  } catch (error) {
+    console.error("WebSocket authentication error:", error);
+    return new Response(JSON.stringify({ error: "WebSocket authentication failed" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+}
+
+/**
+ * Validates that request is a proper WebSocket upgrade request
+ */
+function validateWebSocketUpgrade(request: Request): Response | null {
+  const upgradeHeader = request.headers.get("Upgrade");
+  if (!upgradeHeader || upgradeHeader !== "websocket") {
+    return new Response("Expected Upgrade: websocket", {
+      status: 426,
+    });
+  }
+
+  if (request.method !== "GET") {
+    return new Response("Expected GET method", {
+      status: 400,
+    });
+  }
+
+  return null;
+}
+
 export default {
   async fetch(request: Request, env: typeof worker.Env): Promise<Response> {
     const url = new URL(request.url);
-    
+
+    console.error("Fetching request", request.url);
     // auth methods do not require auth
-    const skipAuth = request.method === 'OPTIONS' || url.pathname.startsWith('/api/auth/') || url.protocol.startsWith('ws') || url.pathname.startsWith('/ws')
-    
+    const skipAuth = request.method === 'OPTIONS' || url.pathname.startsWith('/auth/') || url.protocol.startsWith('ws') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/src/terminal/ws')
+
     if (!skipAuth) {
       const authError = await requireAuth(request);
       if (authError) {
         return authError;
       }
     }
-    
-    // Handle WebSocket
-    if(url.protocol.startsWith('ws') || url.pathname.startsWith('/ws')) {
-      console.error("Handling WebSocket request");
-      return this.handleWebSocket(request, env);
+
+    // Handle WebSocket requests (both terminal and RCON)
+    if (url.protocol.startsWith('ws') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/src/terminal/ws')) {
+      const upgradeHeader = request.headers.get("Upgrade");
+      if (upgradeHeader === "websocket" || request.method === 'OPTIONS') {
+        return this.handleWebSocket(request, url.pathname);
+      }
+      
+      return new Response("Expected Upgrade: websocket", {
+        status: 426,
+      });
+      
     }
-    
+
     return app.fetch(request);
   },
 
-  async handleWebSocket(request: Request, env: typeof worker.Env): Promise<Response> {
-     // Expect to receive a WebSocket Upgrade request.
-      // If there is one, accept the request and return a WebSocket Response.
-      const upgradeHeader = request.headers.get("Upgrade");
-      if (!upgradeHeader || upgradeHeader !== "websocket") {
-        return new Response("Worker expected Upgrade: websocket", {
-          status: 426,
-        });
-      }
+  async handleWebSocket(request: Request, pathname: string): Promise<Response> {
 
-      if (request.method !== "GET") {
-        return new Response("Worker expected GET method", {
-          status: 400,
-        });
-      }
+    if(getNodeEnv() === 'development' && request.method === 'OPTIONS') {
+      // return cors preflight
+      return new Response(null, {
+        status: 200,
+        headers: {
+          'Access-Control-Allow-Origin': request.headers.get('Origin') || '*',
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, Cookie',
+        },
+      });
+    }
       
-      // Validate WebSocket token from query parameter
-      const url = new URL(request.url);
-      const token = url.searchParams.get('token');
+    // Validate WebSocket upgrade headers
+    const upgradeError = validateWebSocketUpgrade(request);
+    if (upgradeError) {
+      return upgradeError;
+    }
+
+    // Validate authentication token
+    const authError = await validateWebSocketAuth(request);
+    if (authError) {
+      return authError;
+    }
+
+    // Token is valid, route to appropriate WebSocket endpoint
+    try {
+      const container = getMinecraftContainer();
       
-      if (!token) {
-        console.error("WebSocket token required");
-        return new Response(JSON.stringify({ error: "WebSocket token required" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" }
-        });
+      if (pathname === '/src/terminal/ws') {
+        console.error("Forwarding WebSocket to ttyd");
+        return container.fetch(request);
+      } else {
+        console.error("Forwarding WebSocket to RCON terminal");
+        // Forward to RCON WebSocket handler
+        return container.fetch(request);
       }
-      
-      try {
-        const symKey = await getSymKeyCached(request);
-        if (!symKey) {
-          console.error("Authentication not configured");
-          return new Response(JSON.stringify({ error: "Authentication not configured" }), {
-            status: 401,
-            headers: { "Content-Type": "application/json" }
-          });
-        }
-        
-        const payload = await decryptToken(symKey, token);
-        if (!payload || payload.exp <= Math.floor(Date.now() / 1000)) {
-          console.error("Invalid or expired WebSocket token");
-          return new Response(JSON.stringify({ error: "Invalid or expired WebSocket token" }), {
-            status: 401,
-            headers: { "Content-Type": "application/json" }
-          });
-        }
-        
-        // Token is valid, proceed with WebSocket connection
-        let stub = getMinecraftContainer();
-        return stub.fetch(request);
-      } catch (error) {
-        console.error("WebSocket authentication error:", error);
-        return new Response(JSON.stringify({ error: "WebSocket authentication failed" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
+    } catch (error) {
+      console.error("WebSocket connection error:", error);
+      return new Response("WebSocket connection failed", { status: 503 });
+    }
   }
 };

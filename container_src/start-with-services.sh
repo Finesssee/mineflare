@@ -1,10 +1,28 @@
 #!/bin/bash
 set -euo pipefail
 
+# Source SDKMAN if available (for Gradle and other dev tools)
+export SDKMAN_DIR="/usr/local/sdkman"
+if [[ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ]]; then
+  set +u  # Temporarily disable unbound variable check
+  source "$SDKMAN_DIR/bin/sdkman-init.sh"
+  set -u
+fi
+
+# Source Java environment
+if [[ -f /etc/profile.d/java21.sh ]]; then
+  source /etc/profile.d/java21.sh
+fi
+
 # Create status directory and set permissions
 sudo mkdir -p /status
 sudo chown 1000:1000 /status
 sudo chmod 755 /status
+
+# Create logs directory and set permissions
+sudo mkdir -p /logs
+sudo chown 1000:1000 /logs
+sudo chmod 755 /logs
 
 # Helper function to write startup status
 write_status() {
@@ -82,7 +100,8 @@ start_tailscale() {
     # Run in userspace mode for container compatibility
     TAILSCALED_ARGS="${TAILSCALED_ARGS} --tun=userspace-networking"
     
-    sudo /usr/sbin/tailscaled ${TAILSCALED_ARGS} &
+    sudo /usr/sbin/tailscaled ${TAILSCALED_ARGS} >> /logs/tailscale.log 2>&1 &
+    echo "Tailscaled started, logging to /logs/tailscale.log"
   fi
 
   if [ -n "${AUTHKEY}" ]; then
@@ -101,7 +120,7 @@ start_tailscale() {
       --accept-dns=false \
       --netfilter-mode=off \
       ${TAILSCALE_HOSTNAME:+--hostname="${TAILSCALE_HOSTNAME}"} \
-      ${EXTRA_ARGS}
+      ${EXTRA_ARGS} >> /logs/tailscale.log 2>&1
     
     if [ $? -eq 0 ]; then
       echo "Tailscale connected successfully"
@@ -203,10 +222,10 @@ start_http_proxy() {
       $PROXY_BINARY || echo "HTTP proxy crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
-  ) &
+  ) >> /logs/http-proxy.log 2>&1 &
   HTTP_PROXY_PID=$!
   
-  echo "HTTP proxy server started in background (PID: $HTTP_PROXY_PID)"
+  echo "HTTP proxy server started in background (PID: $HTTP_PROXY_PID), logging to /logs/http-proxy.log"
 }
 
 setup_hteetp() {
@@ -281,11 +300,11 @@ setup_hteetp() {
 
 start_file_server() {
   echo "Starting file server on port 8083..."
-  
+
   # Detect architecture
   ARCH=$(uname -m)
   echo "Detected architecture: $ARCH"
-  
+
   # Determine the order to try binaries based on architecture
   if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
     # x86_64 system - try x64 first, then arm64
@@ -301,21 +320,21 @@ start_file_server() {
     BINARIES=("/usr/local/bin/file-server-x64" "/usr/local/bin/file-server-arm64")
     NAMES=("x64" "arm64")
   fi
-  
+
   FILE_SERVER_BINARY=""
-  
+
   # Try each binary in order
   for i in 0 1; do
     BINARY="${BINARIES[$i]}"
     NAME="${NAMES[$i]}"
-    
+
     if [ ! -x "$BINARY" ]; then
       echo "Binary $NAME not found or not executable"
       continue
     fi
-    
+
     echo "Testing $NAME binary..."
-    
+
     # Try to execute and check for errors
     # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
     if timeout 2 "$BINARY" --help >/dev/null 2>&1; then
@@ -335,14 +354,14 @@ start_file_server() {
       fi
     fi
   done
-  
+
   if [ -z "$FILE_SERVER_BINARY" ]; then
     echo "Warning: No compatible file server binary found, skipping..."
     return
   fi
-  
+
   echo "Using file server binary: $FILE_SERVER_BINARY"
-  
+
   # Run the file server in background with auto-restart
   (
     while true; do
@@ -350,10 +369,94 @@ start_file_server() {
       $FILE_SERVER_BINARY || echo "File server crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
-  ) &
+  ) >> /logs/file-server.log 2>&1 &
   FILE_SERVER_PID=$!
-  
-  echo "File server started in background (PID: $FILE_SERVER_PID)"
+
+  echo "File server started in background (PID: $FILE_SERVER_PID), logging to /logs/file-server.log"
+}
+
+start_ttyd() {
+  echo "Starting web terminal (ttyd) on port 7681..."
+
+  # Detect architecture
+  ARCH=$(uname -m)
+  echo "Detected architecture: $ARCH"
+
+  # Determine the order to try binaries based on architecture
+  if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
+    # x86_64 system - try x64 first, then arm64
+    BINARIES=("/usr/local/bin/ttyd-x64" "/usr/local/bin/ttyd-arm64")
+    NAMES=("x64" "arm64")
+  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+    # ARM64 system - try arm64 first, then x64
+    BINARIES=("/usr/local/bin/ttyd-arm64" "/usr/local/bin/ttyd-x64")
+    NAMES=("arm64" "x64")
+  else
+    # Unknown architecture - try both starting with x64
+    echo "Warning: Unknown architecture $ARCH"
+    BINARIES=("/usr/local/bin/ttyd-x64" "/usr/local/bin/ttyd-arm64")
+    NAMES=("x64" "arm64")
+  fi
+
+  TTYD_BINARY=""
+
+  # Try each binary in order
+  for i in 0 1; do
+    BINARY="${BINARIES[$i]}"
+    NAME="${NAMES[$i]}"
+
+    if [ ! -x "$BINARY" ]; then
+      echo "Binary $NAME not found or not executable"
+      continue
+    fi
+
+    echo "Testing $NAME binary..."
+
+    # Try to execute and check for errors
+    # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
+    if timeout 2 "$BINARY" --help >/dev/null 2>&1; then
+      echo "✓ $NAME binary is compatible"
+      TTYD_BINARY="$BINARY"
+      break
+    else
+      EXIT_CODE=$?
+      if [ $EXIT_CODE -eq 126 ] || [ $EXIT_CODE -eq 133 ]; then
+        echo "✗ $NAME binary: Architecture mismatch (exit code $EXIT_CODE)"
+      elif [ $EXIT_CODE -eq 124 ]; then
+        echo "✓ $NAME binary timed out but seems to work (this is OK)"
+        TTYD_BINARY="$BINARY"
+        break
+      else
+        echo "✗ $NAME binary failed with exit code $EXIT_CODE"
+      fi
+    fi
+  done
+
+  if [ -z "$TTYD_BINARY" ]; then
+    echo "Warning: No compatible ttyd binary found, skipping..."
+    return
+  fi
+
+  echo "Using ttyd binary: $TTYD_BINARY"
+
+  # Run ttyd in background with auto-restart
+  (
+    while true; do
+      echo "Starting ttyd (attempt at $(date))"
+      $TTYD_BINARY \
+        --port 7681 \
+        --interface 0.0.0.0 \
+        --base-path /src/terminal \
+        --writable \
+        --client-option fontSize=14 \
+        --client-option 'theme={"background":"#0a1612","foreground":"#e0e0e0","cursor":"#55FF55","cursorAccent":"#0a1612","selectionBackground":"#57A64E"}' \
+        claude || echo "ttyd crashed (exit code: $?), restarting in 2 seconds..."
+      sleep 2
+    done
+  ) >> /logs/ttyd.log 2>&1 &
+  TTYD_PID=$!
+
+  echo "ttyd terminal started in background (PID: $TTYD_PID), logging to /logs/ttyd.log"
 }
 
 backup_on_shutdown() {
@@ -377,7 +480,15 @@ backup_on_shutdown() {
 
 kill_background_processes() {
   echo "Killing background processes..."
-  
+
+  # Kill Minecraft process and its children
+  if [ -n "${MINECRAFT_PID:-}" ]; then
+    echo "Killing Minecraft server (PID: $MINECRAFT_PID) and its children..."
+    # Kill the entire process group
+    pkill -KILL -P "$MINECRAFT_PID" 2>/dev/null || true
+    kill -KILL "$MINECRAFT_PID" 2>/dev/null || true
+  fi
+
   # Kill file server process and its children
   if [ -n "${FILE_SERVER_PID:-}" ]; then
     echo "Killing file server (PID: $FILE_SERVER_PID) and its children..."
@@ -385,7 +496,15 @@ kill_background_processes() {
     pkill -KILL -P "$FILE_SERVER_PID" 2>/dev/null || true
     kill -KILL "$FILE_SERVER_PID" 2>/dev/null || true
   fi
-  
+
+  # Kill ttyd process and its children
+  if [ -n "${TTYD_PID:-}" ]; then
+    echo "Killing ttyd (PID: $TTYD_PID) and its children..."
+    # Kill the entire process group
+    pkill -KILL -P "$TTYD_PID" 2>/dev/null || true
+    kill -KILL "$TTYD_PID" 2>/dev/null || true
+  fi
+
   # Kill HTTP proxy process and its children
   if [ -n "${HTTP_PROXY_PID:-}" ]; then
     echo "Killing HTTP proxy (PID: $HTTP_PROXY_PID) and its children..."
@@ -393,7 +512,7 @@ kill_background_processes() {
     pkill -KILL -P "$HTTP_PROXY_PID" 2>/dev/null || true
     kill -KILL "$HTTP_PROXY_PID" 2>/dev/null || true
   fi
-  
+
   echo "Background processes terminated"
 }
 
@@ -401,14 +520,18 @@ handle_shutdown() {
   echo "Received SIGTERM, initiating graceful shutdown..."
   
   # Forward SIGTERM to the main process (Minecraft server)
-  if [ -n "${MAIN_PID:-}" ]; then
-    echo "Sending SIGTERM to main process (PID: $MAIN_PID)..."
-    kill -TERM "$MAIN_PID" 2>/dev/null || true
+  TARGET_PID="${MC_CHILD_PID:-}"
+  if [ -z "$TARGET_PID" ] && [ -f /tmp/minecraft.pid ]; then
+    TARGET_PID=$(cat /tmp/minecraft.pid 2>/dev/null || echo "")
+  fi
+  if [ -n "$TARGET_PID" ]; then
+    echo "Sending SIGTERM to main process (PID: $TARGET_PID)..."
+    kill -TERM "$TARGET_PID" 2>/dev/null || true
     
     # Wait for main process to exit gracefully (with timeout)
     echo "Waiting for main process to exit gracefully..."
     for i in $(seq 1 60); do
-      if ! kill -0 "$MAIN_PID" 2>/dev/null; then
+      if ! kill -0 "$TARGET_PID" 2>/dev/null; then
         echo "Main process exited gracefully"
         break
       fi
@@ -416,9 +539,9 @@ handle_shutdown() {
     done
     
     # Force kill if still running after timeout
-    if kill -0 "$MAIN_PID" 2>/dev/null; then
+    if kill -0 "$TARGET_PID" 2>/dev/null; then
       echo "Main process did not exit in time, forcing shutdown..."
-      kill -KILL "$MAIN_PID" 2>/dev/null || true
+      kill -KILL "$TARGET_PID" 2>/dev/null || true
     fi
   fi
   
@@ -537,10 +660,6 @@ write_status "Initializing services"
 
 echo "Starting services..."
 
-# Setup hteetp binary
-write_status "Setting up hteetp"
-setup_hteetp
-
 # Start the file server
 write_status "Starting file server"
 start_file_server
@@ -549,12 +668,22 @@ start_file_server
 write_status "Starting HTTP proxy"
 start_http_proxy
 
-# Start Tailscale in background
+# Start Tailscale in background if it's enabled
 start_tailscale
+
+
+# Setup hteetp binary
+write_status "Setting up hteetp"
+setup_hteetp
 
 # Restore from backups before starting Minecraft server
 write_status "Checking for backups to restore"
 restore_from_backup || (sleep 15 && restore_from_backup)
+
+
+# Start the web terminal (ttyd) after the backups are restored
+write_status "Starting web terminal"
+start_ttyd
 
 # Install optional plugins
 write_status "Installing optional plugins"
@@ -572,21 +701,44 @@ write_status "Starting Minecraft server"
 # Set up SIGTERM trap
 trap handle_shutdown SIGTERM
 
-# Execute the main command (Minecraft server) & pipe to hteetp in background
-"$@" | hteetp --host 0.0.0.0 --port 8082 --size 1M --text &
-MAIN_PID=$!
+# Execute Minecraft in restart loop (background)
+(
+  while true; do
+    echo "Starting Minecraft server (attempt at $(date))"
+    write_status "Minecraft server running"
+    
+    # Create a named pipe for this iteration
+    PIPE="/tmp/mc-output-$$-$RANDOM"
+    mkfifo "$PIPE"
+    
+    # Start hteetp reading from the pipe in background
+    hteetp --host 0.0.0.0 --port 8082 --size 1M --text < "$PIPE" &
+    HTEETP_PID=$!
+    
+    # Run Minecraft with output redirected to the pipe
+    # Capture the actual child PID so shutdown can signal it directly
+    # Disable errexit for this block so a crash doesn't terminate the loop
+    set +e
+    "$@" > "$PIPE" 2>&1 &
+    MC_CHILD_PID=$!
+    echo "$MC_CHILD_PID" > /tmp/minecraft.pid
+    wait "$MC_CHILD_PID"
+    EXIT_CODE=$?
+    set -e
+    
+    # Minecraft has exited - clean up hteetp and the pipe
+    kill $HTEETP_PID 2>/dev/null || true
+    wait $HTEETP_PID 2>/dev/null || true
+    rm -f "$PIPE"
+    
+    echo "Minecraft server exited (code: $EXIT_CODE), restarting in 2 seconds..."
+    write_status "Minecraft server restarting"
+    sleep 2
+  done
+) &
+MINECRAFT_PID=$!
 
-echo "Main process started with PID: $MAIN_PID"
-write_status "Minecraft server running"
+echo "Minecraft server started in restart loop (PID: $MINECRAFT_PID)"
 
-# Wait for main process to exit
-wait "$MAIN_PID"
-EXIT_CODE=$?
-
-echo "Main process exited with code: $EXIT_CODE, performing backup..."
-backup_on_shutdown
-
-# Kill all background processes
-kill_background_processes
-
-exit $EXIT_CODE
+# Wait indefinitely for container shutdown signal
+wait

@@ -158,6 +158,80 @@ export function ServerStatus({ status, info, serverState, startupStep }: Props) 
     );
   }
   
+  // Show stopped state
+  if (serverState === 'stopped') {
+    return (
+      <div style={{
+        background: 'rgba(26, 46, 30, 0.4)',
+        backdropFilter: 'blur(10px)',
+        border: '1px solid rgba(136, 136, 136, 0.2)',
+        borderRadius: '16px',
+        padding: '32px',
+        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+      }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          marginBottom: '24px',
+        }}>
+          <div style={{
+            width: '48px',
+            height: '48px',
+            borderRadius: '12px',
+            background: 'linear-gradient(135deg, #666 0%, #555 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '1.5rem',
+            marginRight: '16px',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+          }}>
+            ⏹
+          </div>
+          <div>
+            <h2 style={{
+              margin: '0 0 4px 0',
+              fontSize: '1.5rem',
+              fontWeight: '700',
+              color: '#fff',
+            }}>
+              Server Status
+            </h2>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}>
+              <div style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: '#888',
+                boxShadow: '0 0 8px #888',
+              }} />
+              <span style={{
+                color: '#888',
+                fontWeight: '600',
+                fontSize: '0.875rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}>
+                Stopped
+              </span>
+            </div>
+          </div>
+        </div>
+        <div style={{
+          color: '#888',
+          fontSize: '0.875rem',
+          textAlign: 'center',
+        }}>
+          Server is currently offline
+        </div>
+      </div>
+    );
+  }
+  
   if (!status) {
     return (
       <div style={{
