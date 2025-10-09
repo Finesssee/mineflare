@@ -2,7 +2,7 @@
 
 import { $ } from "bun";
 import { createHash } from "crypto";
-import { readdirSync, statSync, readFileSync } from "fs";
+import { readdirSync, statSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 // This script builds and pushes the docker image to the cloudflare container registry
@@ -16,6 +16,13 @@ if(!skipPush && process.env.CI) {
 
 // change cwd to the directory of the script
 process.chdir(import.meta.dirname)
+
+
+if(existsSync(".BASE_DOCKERFILE") && process.env.CI) {
+    // For now speed up cloudflare workers CI by using the cached base image
+    console.log("Using cached base image", readFileSync(".BASE_DOCKERFILE", "utf-8"));
+    process.exit(0);
+}
 
 // Ensure buildx builder exists and is using it
 console.log("Setting up Docker buildx...");
