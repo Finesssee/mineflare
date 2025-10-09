@@ -12,7 +12,7 @@
     "predeploy": "mkdir -p dist/client && find dist/client -mindepth 1 ! -name '*.png' -delete",
     "deploy": "touch .env && NODE_ENV=production alchemy deploy --env-file .env",
     "destroy": "touch .env && NODE_ENV=production alchemy destroy --env-file .env",
-    "dev": "touch .env && ./container_src/build-container-services.sh && NODE_ENV=development alchemy dev --env-file .env",
+    "dev": "touch .env && bun ./docker_src/build.ts && NODE_ENV=development alchemy dev --env-file .env",
     "dev:spa": "vite"
   },
   "devDependencies": {

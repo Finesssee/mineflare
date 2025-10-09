@@ -35,29 +35,80 @@ try {
     console.log("Created new buildx builder");
 }
 
-const buildContainerServices = await $`bash ./build-container-services.sh`.catch((error) => {
-    console.error(error)
-    console.error("Failed to build container services")
-    process.exit(1)
-})
+// Compute and cache the build state for build-container-services.sh
+const BUILD_SERVICES_SCRIPT = "./build-container-services.sh";
+const BUILD_SERVICES_CACHE_FILE = ".BUILD_CONTAINER_SERVICES";
+const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+
+let shouldRunBuildServices = true;
+let buildServicesHash = "";
+const nowMs = Date.now();
+
+try {
+    const scriptContent = readFileSync(BUILD_SERVICES_SCRIPT);
+    buildServicesHash = createHash("sha256").update(scriptContent).digest("hex");
+} catch (error) {
+    console.warn("Could not read build-container-services.sh to compute hash; will run it.", error);
+}
+
+if (buildServicesHash && existsSync(BUILD_SERVICES_CACHE_FILE)) {
+    try {
+        const cacheRaw = readFileSync(BUILD_SERVICES_CACHE_FILE, "utf-8");
+        const cache = JSON.parse(cacheRaw) as { hash: string; lastRunMs: number };
+        const hashMatches = cache.hash === buildServicesHash;
+        const recentlyRan = (nowMs - cache.lastRunMs) < SIX_HOURS_MS;
+        if (hashMatches && recentlyRan) {
+            shouldRunBuildServices = false;
+            console.log("Skipping build-container-services: hash unchanged and ran within last 6 hours");
+        }
+    } catch (error) {
+        console.warn("Failed to read/parse .BUILD_CONTAINER_SERVICES; will run build-container-services", error);
+    }
+}
+
+if (shouldRunBuildServices) {
+    await $`bash ${BUILD_SERVICES_SCRIPT}`.catch((error) => {
+        console.error(error)
+        console.error("Failed to build container services")
+        process.exit(1)
+    })
+    try {
+        await Bun.write(BUILD_SERVICES_CACHE_FILE, JSON.stringify({ hash: buildServicesHash, lastRunMs: nowMs }));
+        console.log("✓ Updated .BUILD_CONTAINER_SERVICES cache");
+    } catch (error) {
+        console.warn("Failed to write .BUILD_CONTAINER_SERVICES cache", error);
+    }
+} else {
+    console.log("✓ Using cached container services build");
+}
 
 const contentHash = hashDirectory(import.meta.dirname);
 console.log(`Directory content hash: ${contentHash}`);
 const tag = `${REPO}:${contentHash}`
 
-// Check if multi-arch image exists using manifest inspect
+// Check if image exists locally first; if not, try pulling from remote
 let imageExists = false;
 try {
-    console.log(`Checking if multi-arch image ${tag} exists...`);
-    await $`docker manifest inspect ${tag}`;
+    console.log(`Checking if image ${tag} exists locally...`);
+    await $`docker image inspect ${tag}`;
     imageExists = true;
-    console.log(`✓ Image ${tag} already exists, skipping build`);
-} catch (error) {
-    if(error.stderr.includes("no such manifest") || error.stderr.includes("not found") || error.stderr.includes("failed to resolve reference")) {
-        console.log("Image not found, will build it");
+    console.log(`✓ Image ${tag} found locally, skipping build`);
+} catch (localError) {
+    if (localError.stderr?.includes("No such image") || localError.stderr?.includes("No such object") || localError.stderr?.toLowerCase?.().includes("not found")) {
+        console.log(`Image ${tag} not found locally. Attempting to pull from registry...`);
+        try {
+            await $`docker pull ${tag}`;
+            imageExists = true;
+            console.log(`✓ Pulled ${tag} from registry, skipping build`);
+        } catch (pullError) {
+            if (pullError.stderr?.toLowerCase?.().includes("not found") || pullError.stderr?.toLowerCase?.().includes("pull access denied")) {
+                console.log("Image not found in registry; will build it");
+            } else {
+                console.error("Unexpected error while pulling image:", pullError);
+            }
+        }
     } else {
-        // Unexpected error during manifest check
-        console.error("Unexpected error while checking manifest:", error);
+        console.error("Unexpected error while checking local image:", localError);
     }
 }
 

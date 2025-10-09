@@ -2,7 +2,7 @@
 
 import alchemy, { type Scope } from "alchemy";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
-import { Container, R2Bucket, BunSPA, Worker } from "alchemy/cloudflare";
+import { DurableObjectNamespace, Container, R2Bucket, BunSPA, Worker } from "alchemy/cloudflare";
 import { MinecraftContainer } from "./src/container.ts";
 
 const cloudflareStateStore = (scope: Scope) => new CloudflareStateStore(scope, {
@@ -33,8 +33,6 @@ export const container = await Container<MinecraftContainer>("container3", {
   },
   instanceType: "standard-4"
 });
-
-
 
 // R2 bucket for Dynmap tiles and web UI
 const dynmapBucket = await R2Bucket("dynmap-tiles", {
@@ -154,8 +152,24 @@ export const worker = await BunSPA("mineflare-main-worker", {
 });
 
 
-console.log("Worker URL:", worker.url);
-console.log("Dynmap URL:", `https://${dynmapBucket.domain}`);
+const agentDO = await DurableObjectNamespace("mineflare-agent", {
+    className: "MineflareAgent",
+    sqlite: true,
+});
+
+const agentWorker = await Worker("mineflare-agent", {
+  name: `${app.name}-agent`,
+  entrypoint: "src/agent.ts",
+  adopt: true,
+  compatibility: "node",
+  bindings: {
+    MCP_OBJECT: agentDO,
+    MINEFLARE_WORKER: worker // bind to the main worker
+  },
+});
+
 console.log("Dynmap Worker URL:", dynmapWorker.url);
+console.log("Agent Worker URL:", agentWorker.url);
+console.log("Worker URL:", worker.url);
 
 await app.finalize();
