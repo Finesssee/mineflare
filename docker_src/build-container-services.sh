@@ -11,181 +11,286 @@ if ! command -v bun &> /dev/null; then
     exit 1
 fi
 
+# Create a temporary directory for logs
+LOG_DIR=$(mktemp -d)
+trap "rm -rf $LOG_DIR" EXIT
+
+# Function to build http-proxy binaries
+build_http_proxy() {
+    local log_file="$LOG_DIR/http-proxy.log"
+    {
+        echo "=== Building HTTP Proxy ==="
+        
+        echo "Compiling http-proxy.ts for linux-x64..."
+        bun build --compile ./http-proxy.ts --target=bun-linux-x64 --outfile=http-proxy-x64
+        
+        if [ -f "./http-proxy-x64" ]; then
+            echo "✓ Build successful! Binary created: ./http-proxy-x64"
+            ls -lh ./http-proxy-x64
+        else
+            echo "✗ x64 build failed!"
+            return 1
+        fi
+        
+        echo "Compiling http-proxy.ts for linux-arm64..."
+        bun build --compile ./http-proxy.ts --target=bun-linux-arm64 --outfile=http-proxy-arm64
+        
+        if [ -f "./http-proxy-arm64" ]; then
+            echo "✓ Build successful! Binary created: ./http-proxy-arm64"
+            ls -lh ./http-proxy-arm64
+        else
+            echo "✗ arm64 build failed!"
+            return 1
+        fi
+        
+        echo "✓ HTTP Proxy build completed successfully"
+    } &> "$log_file"
+    
+    if [ $? -ne 0 ]; then
+        cat "$log_file"
+        return 1
+    fi
+    cat "$log_file"
+    return 0
+}
+
+# Function to build file-server binaries
+build_file_server() {
+    local log_file="$LOG_DIR/file-server.log"
+    {
+        echo "=== Building File Server ==="
+        
+        echo "Compiling file-server.ts for linux-x64..."
+        bun build --compile ./file-server.ts --target=bun-linux-x64 --outfile=file-server-x64
+        
+        if [ -f "./file-server-x64" ]; then
+            echo "✓ Build successful! Binary created: ./file-server-x64"
+            ls -lh ./file-server-x64
+        else
+            echo "✗ x64 build failed!"
+            return 1
+        fi
+        
+        echo "Compiling file-server.ts for linux-arm64..."
+        bun build --compile ./file-server.ts --target=bun-linux-arm64 --outfile=file-server-arm64
+        
+        if [ -f "./file-server-arm64" ]; then
+            echo "✓ Build successful! Binary created: ./file-server-arm64"
+            ls -lh ./file-server-arm64
+        else
+            echo "✗ arm64 build failed!"
+            return 1
+        fi
+        
+        echo "✓ File Server build completed successfully"
+    } &> "$log_file"
+    
+    if [ $? -ne 0 ]; then
+        cat "$log_file"
+        return 1
+    fi
+    cat "$log_file"
+    return 0
+}
+
+# Function to download hteetp binaries
+download_hteetp() {
+    local log_file="$LOG_DIR/hteetp.log"
+    {
+        echo "=== Downloading hteetp binaries ==="
+        
+        REPO="eastlondoner/hteetp"
+        
+        echo "Getting latest hteetp version..."
+        VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+        
+        if [ -z "$VERSION" ]; then
+            echo "✗ Failed to get latest hteetp version!"
+            return 1
+        fi
+        
+        echo "Latest hteetp version: $VERSION"
+        
+        echo "Downloading hteetp-linux-x64..."
+        DOWNLOAD_URL_X64="https://github.com/$REPO/releases/download/$VERSION/hteetp-linux-x64.gz"
+        if curl -L -o hteetp-linux-x64.gz "$DOWNLOAD_URL_X64"; then
+            echo "✓ Downloaded hteetp-linux-x64.gz"
+            gunzip -f hteetp-linux-x64.gz
+            chmod +x hteetp-linux-x64
+            ls -lh ./hteetp-linux-x64
+        else
+            echo "✗ Failed to download hteetp-linux-x64!"
+            return 1
+        fi
+        
+        echo "Downloading hteetp-linux-arm64..."
+        DOWNLOAD_URL_ARM64="https://github.com/$REPO/releases/download/$VERSION/hteetp-linux-arm64.gz"
+        if curl -L -o hteetp-linux-arm64.gz "$DOWNLOAD_URL_ARM64"; then
+            echo "✓ Downloaded hteetp-linux-arm64.gz"
+            gunzip -f hteetp-linux-arm64.gz
+            chmod +x hteetp-linux-arm64
+            ls -lh ./hteetp-linux-arm64
+        else
+            echo "✗ Failed to download hteetp-linux-arm64!"
+            return 1
+        fi
+        
+        echo "✓ hteetp download completed successfully"
+    } &> "$log_file"
+    
+    if [ $? -ne 0 ]; then
+        cat "$log_file"
+        return 1
+    fi
+    cat "$log_file"
+    return 0
+}
+
+# Function to download ttyd binaries
+download_ttyd() {
+    local log_file="$LOG_DIR/ttyd.log"
+    {
+        echo "=== Downloading ttyd binaries ==="
+        
+        TTYD_VERSION="1.7.7"
+        echo "Downloading ttyd version: $TTYD_VERSION"
+        
+        echo "Downloading ttyd-x64..."
+        TTYD_URL_X64="https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64"
+        if curl -fsSL -o ttyd-x64 "$TTYD_URL_X64"; then
+            echo "✓ Downloaded ttyd-x64"
+            chmod +x ttyd-x64
+            ls -lh ./ttyd-x64
+        else
+            echo "✗ Failed to download ttyd-x64!"
+            return 1
+        fi
+        
+        echo "Downloading ttyd-arm64..."
+        TTYD_URL_ARM64="https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.aarch64"
+        if curl -fsSL -o ttyd-arm64 "$TTYD_URL_ARM64"; then
+            echo "✓ Downloaded ttyd-arm64"
+            chmod +x ttyd-arm64
+            ls -lh ./ttyd-arm64
+        else
+            echo "✗ Failed to download ttyd-arm64!"
+            return 1
+        fi
+        
+        echo "✓ ttyd download completed successfully"
+    } &> "$log_file"
+    
+    if [ $? -ne 0 ]; then
+        cat "$log_file"
+        return 1
+    fi
+    cat "$log_file"
+    return 0
+}
+
+# Function to download Claude Code binaries
+download_claude() {
+    local log_file="$LOG_DIR/claude.log"
+    {
+        echo "=== Downloading Claude Code binaries ==="
+        
+        GCS_BUCKET="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
+        
+        echo "Getting stable Claude Code version..."
+        CLAUDE_VERSION=$(curl -fsSL "$GCS_BUCKET/stable")
+        
+        if [ -z "$CLAUDE_VERSION" ]; then
+            echo "✗ Failed to get Claude Code version!"
+            return 1
+        fi
+        
+        echo "Claude Code version: $CLAUDE_VERSION"
+        
+        echo "Downloading claude-linux-x64..."
+        CLAUDE_URL_X64="$GCS_BUCKET/$CLAUDE_VERSION/linux-x64/claude"
+        if curl -fsSL -o claude-x64 "$CLAUDE_URL_X64"; then
+            echo "✓ Downloaded claude-x64"
+            chmod +x claude-x64
+            ls -lh ./claude-x64
+        else
+            echo "✗ Failed to download claude-x64!"
+            return 1
+        fi
+        
+        echo "Downloading claude-linux-arm64..."
+        CLAUDE_URL_ARM64="$GCS_BUCKET/$CLAUDE_VERSION/linux-arm64/claude"
+        if curl -fsSL -o claude-arm64 "$CLAUDE_URL_ARM64"; then
+            echo "✓ Downloaded claude-arm64"
+            chmod +x claude-arm64
+            ls -lh ./claude-arm64
+        else
+            echo "✗ Failed to download claude-arm64!"
+            return 1
+        fi
+        
+        echo "✓ Claude Code download completed successfully"
+    } &> "$log_file"
+    
+    if [ $? -ne 0 ]; then
+        cat "$log_file"
+        return 1
+    fi
+    cat "$log_file"
+    return 0
+}
+
 echo ""
-echo "=== Building HTTP Proxy ==="
+echo "Starting parallel builds and downloads..."
 echo ""
 
-# Build http-proxy for amd64 (x86_64)
-echo "Compiling http-proxy.ts for linux-x64..."
-bun build --compile ./http-proxy.ts --target=bun-linux-x64 --outfile=http-proxy-x64
+# Run all tasks in parallel
+build_http_proxy &
+PID_HTTP_PROXY=$!
 
-if [ -f "./http-proxy-x64" ]; then
-    echo "✓ Build successful! Binary created: ./http-proxy-x64"
-    ls -lh ./http-proxy-x64
+build_file_server &
+PID_FILE_SERVER=$!
+
+download_hteetp &
+PID_HTEETP=$!
+
+download_ttyd &
+PID_TTYD=$!
+
+download_claude &
+PID_CLAUDE=$!
+
+# Wait for all tasks and collect exit codes (bash 3.2 compatible)
+PIDS=($PID_HTTP_PROXY $PID_FILE_SERVER $PID_HTEETP $PID_TTYD $PID_CLAUDE)
+TASK_NAMES=("HTTP Proxy build" "File Server build" "hteetp download" "ttyd download" "Claude Code download")
+TASK_STATUS=()
+
+# Wait for each task and collect status
+for pid in "${PIDS[@]}"; do
+    wait $pid
+    TASK_STATUS+=($?)
+done
+
+# Check if any tasks failed
+FAILED_TASKS=()
+for i in $(seq 0 $((${#PIDS[@]} - 1))); do
+    if [ "${TASK_STATUS[$i]}" -ne 0 ]; then
+        FAILED_TASKS+=("${TASK_NAMES[$i]}")
+    fi
+done
+
+echo ""
+if [ ${#FAILED_TASKS[@]} -eq 0 ]; then
+    echo "✓ All binaries built/downloaded successfully!"
+    echo "  - http-proxy-x64, http-proxy-arm64"
+    echo "  - file-server-x64, file-server-arm64"
+    echo "  - hteetp-linux-x64, hteetp-linux-arm64"
+    echo "  - ttyd-x64, ttyd-arm64"
+    echo "  - claude-x64, claude-arm64"
+    exit 0
 else
-    echo "✗ x64 build failed!"
+    echo "✗ The following tasks failed:"
+    for task in "${FAILED_TASKS[@]}"; do
+        echo "  - $task"
+    done
     exit 1
 fi
-
-# Build http-proxy for arm64
-echo "Compiling http-proxy.ts for linux-arm64..."
-bun build --compile ./http-proxy.ts --target=bun-linux-arm64 --outfile=http-proxy-arm64
-
-if [ -f "./http-proxy-arm64" ]; then
-    echo "✓ Build successful! Binary created: ./http-proxy-arm64"
-    ls -lh ./http-proxy-arm64
-else
-    echo "✗ arm64 build failed!"
-    exit 1
-fi
-
-echo ""
-echo "=== Building File Server ==="
-echo ""
-
-# Build file-server for amd64 (x86_64)
-echo "Compiling file-server.ts for linux-x64..."
-bun build --compile ./file-server.ts --target=bun-linux-x64 --outfile=file-server-x64
-
-if [ -f "./file-server-x64" ]; then
-    echo "✓ Build successful! Binary created: ./file-server-x64"
-    ls -lh ./file-server-x64
-else
-    echo "✗ x64 build failed!"
-    exit 1
-fi
-
-# Build file-server for arm64
-echo "Compiling file-server.ts for linux-arm64..."
-bun build --compile ./file-server.ts --target=bun-linux-arm64 --outfile=file-server-arm64
-
-if [ -f "./file-server-arm64" ]; then
-    echo "✓ Build successful! Binary created: ./file-server-arm64"
-    ls -lh ./file-server-arm64
-else
-    echo "✗ arm64 build failed!"
-    exit 1
-fi
-
-echo ""
-echo "=== Downloading hteetp binaries ==="
-echo ""
-
-REPO="eastlondoner/hteetp"
-
-# Get latest version from GitHub API
-echo "Getting latest hteetp version..."
-VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
-
-if [ -z "$VERSION" ]; then
-    echo "✗ Failed to get latest hteetp version!"
-    exit 1
-fi
-
-echo "Latest hteetp version: $VERSION"
-
-# Download linux-x64 binary
-echo "Downloading hteetp-linux-x64..."
-DOWNLOAD_URL_X64="https://github.com/$REPO/releases/download/$VERSION/hteetp-linux-x64.gz"
-if curl -L -o hteetp-linux-x64.gz "$DOWNLOAD_URL_X64"; then
-    echo "✓ Downloaded hteetp-linux-x64.gz"
-    gunzip -f hteetp-linux-x64.gz
-    chmod +x hteetp-linux-x64
-    ls -lh ./hteetp-linux-x64
-else
-    echo "✗ Failed to download hteetp-linux-x64!"
-    exit 1
-fi
-
-# Download linux-arm64 binary
-echo "Downloading hteetp-linux-arm64..."
-DOWNLOAD_URL_ARM64="https://github.com/$REPO/releases/download/$VERSION/hteetp-linux-arm64.gz"
-if curl -L -o hteetp-linux-arm64.gz "$DOWNLOAD_URL_ARM64"; then
-    echo "✓ Downloaded hteetp-linux-arm64.gz"
-    gunzip -f hteetp-linux-arm64.gz
-    chmod +x hteetp-linux-arm64
-    ls -lh ./hteetp-linux-arm64
-else
-    echo "✗ Failed to download hteetp-linux-arm64!"
-    exit 1
-fi
-
-echo ""
-echo "=== Downloading ttyd binaries ==="
-echo ""
-
-TTYD_VERSION="1.7.7"
-echo "Downloading ttyd version: $TTYD_VERSION"
-
-# Download x64 binary
-echo "Downloading ttyd-x64..."
-TTYD_URL_X64="https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64"
-if curl -fsSL -o ttyd-x64 "$TTYD_URL_X64"; then
-    echo "✓ Downloaded ttyd-x64"
-    chmod +x ttyd-x64
-    ls -lh ./ttyd-x64
-else
-    echo "✗ Failed to download ttyd-x64!"
-    exit 1
-fi
-
-# Download arm64 binary
-echo "Downloading ttyd-arm64..."
-TTYD_URL_ARM64="https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.aarch64"
-if curl -fsSL -o ttyd-arm64 "$TTYD_URL_ARM64"; then
-    echo "✓ Downloaded ttyd-arm64"
-    chmod +x ttyd-arm64
-    ls -lh ./ttyd-arm64
-else
-    echo "✗ Failed to download ttyd-arm64!"
-    exit 1
-fi
-
-echo ""
-echo "=== Downloading Claude Code binaries ==="
-echo ""
-
-GCS_BUCKET="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
-
-# Get the stable version number
-echo "Getting stable Claude Code version..."
-CLAUDE_VERSION=$(curl -fsSL "$GCS_BUCKET/stable")
-
-if [ -z "$CLAUDE_VERSION" ]; then
-    echo "✗ Failed to get Claude Code version!"
-    exit 1
-fi
-
-echo "Claude Code version: $CLAUDE_VERSION"
-
-# Download linux-x64 binary
-echo "Downloading claude-linux-x64..."
-CLAUDE_URL_X64="$GCS_BUCKET/$CLAUDE_VERSION/linux-x64/claude"
-if curl -fsSL -o claude-x64 "$CLAUDE_URL_X64"; then
-    echo "✓ Downloaded claude-x64"
-    chmod +x claude-x64
-    ls -lh ./claude-x64
-else
-    echo "✗ Failed to download claude-x64!"
-    exit 1
-fi
-
-# Download linux-arm64 binary
-echo "Downloading claude-linux-arm64..."
-CLAUDE_URL_ARM64="$GCS_BUCKET/$CLAUDE_VERSION/linux-arm64/claude"
-if curl -fsSL -o claude-arm64 "$CLAUDE_URL_ARM64"; then
-    echo "✓ Downloaded claude-arm64"
-    chmod +x claude-arm64
-    ls -lh ./claude-arm64
-else
-    echo "✗ Failed to download claude-arm64!"
-    exit 1
-fi
-
-echo ""
-echo "All binaries built/downloaded successfully!"
-echo "  - http-proxy-x64, http-proxy-arm64"
-echo "  - file-server-x64, file-server-arm64"
-echo "  - hteetp-linux-x64, hteetp-linux-arm64"
-echo "  - ttyd-x64, ttyd-arm64"
-echo "  - claude-x64, claude-arm64"

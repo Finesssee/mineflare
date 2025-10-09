@@ -1,4 +1,4 @@
-/// <reference types="@types/node" />
+/// <reference types="@types/bun" />
 
 import alchemy, { type Scope } from "alchemy";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
@@ -18,6 +18,8 @@ const app = await alchemy(process.env.WRANGLER_CI_OVERRIDE_NAME ?? "mineflare", 
   password: process.env.ALCHEMY_PASSWORD ?? "minecraft-on-cloudflare-is-awesome-this-is-used-to-encrypt-secrets-stored-locally-but-we-dont-have-any-so-its-fine-to-use-this-password",
 });
 
+const baseDockerfile = await Bun.file("docker_src/.BASE_DOCKERFILE").text();
+console.log(`Base Dockerfile: ${baseDockerfile}`);
 export const container = await Container<MinecraftContainer>("container3", {
   name: `${app.name}-container`,
   className: "MinecraftContainer",
@@ -26,7 +28,7 @@ export const container = await Container<MinecraftContainer>("container3", {
     context: 'container_src',
     dockerfile: "Dockerfile",
     args: {
-        BASE_DOCKERFILE: process.env.BASE_DOCKERFILE ?? "andrewjefferson/mineflare-base",
+        BASE_DOCKERFILE: baseDockerfile
     }
   },
   instanceType: "standard-4"

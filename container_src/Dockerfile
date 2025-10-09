@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-ARG BASE_DOCKERFILE=andrewjefferson/mineflare-base
-FROM ${BASE_DOCKERFILE}:latest
+ARG BASE_DOCKERFILE
+FROM ${BASE_DOCKERFILE}
 
 USER 1000:1000
 
