@@ -9,6 +9,10 @@ import { join } from "path";
 
 const REPO = process.env.BASE_DOCKERFILE ?? "andrewjefferson/mineflare-base"
 const PLATFORMS = process.env.DOCKER_PLATFORMS ?? "linux/amd64,linux/arm64"
+let skipPush = process.env.SKIP_PUSH ?.toLowerCase() === "true"
+if(!skipPush && process.env.CI) {
+    skipPush = true
+}
 
 // change cwd to the directory of the script
 process.chdir(import.meta.dirname)
@@ -55,7 +59,7 @@ if (!imageExists) {
     console.log(`Building multi-arch image ${tag} for platforms: ${PLATFORMS}...`);
     
     // Build multi-arch image with buildx and push (buildx requires --push for multi-platform)
-    await $`docker buildx build --platform ${PLATFORMS} --cache-from type=registry,ref=${tag} --cache-to type=inline --push -t ${tag} .`
+    await $`docker buildx build --platform ${PLATFORMS} --cache-from type=registry,ref=${tag} --cache-to type=inline ${skipPush ? "" : "--push"} -t ${tag} .`
         .catch((error) => {
             console.error(error)
             console.error("Failed to build multi-arch image")
