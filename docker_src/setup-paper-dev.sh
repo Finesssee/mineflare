@@ -170,18 +170,28 @@ summary() {
   echo "  java -version"
   echo "  javac -version"
   echo "  gradle -v"
-  [[ "$WITH_MAVEN" == "true" && "$MINIMAL" != "true" ]] && echo "  mvn -v"
+  if [[ "$WITH_MAVEN" == "true" && "$MINIMAL" != "true" ]]; then
+    echo "  - Maven"
+    echo "  mvn -v"
+  fi
 }
 
 main() {
+  echo "Setting up paper dev environment ..."
   require_sudo
+  echo "Installing core packages ..."
   apt_install
+  echo "Setting JAVA_HOME ..."
   set_java_home_profile
+  echo "Installing SDKMAN! and Gradle ..."
   install_sdkman_and_gradle
+  echo "Installing Maven ..."
   install_maven_optional
+  echo "Tuning system ..."
   tune_system_small
+  echo "Summary ..."
   summary
+  echo "Setup complete."
 }
 
 main "$@"
-

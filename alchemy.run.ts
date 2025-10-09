@@ -25,6 +25,9 @@ export const container = await Container<MinecraftContainer>("container3", {
   build: {
     context: 'container_src',
     dockerfile: "Dockerfile",
+    args: {
+        BASE_DOCKERFILE: process.env.BASE_DOCKERFILE ?? "andrewjefferson/mineflare-base",
+    }
   },
   instanceType: "standard-4"
 });
