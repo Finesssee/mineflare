@@ -10,7 +10,7 @@ interface AuthState {
 
 export function useAuth() {
   const [state, setState] = useState<AuthState>({
-    passwordSet: false,
+    passwordSet: true,
     authenticated: false,
     loading: true,
     error: null,

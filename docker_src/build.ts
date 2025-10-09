@@ -90,7 +90,7 @@ const tag = `${REPO}:${contentHash}`
 let imageExists = false;
 try {
     console.log(`Checking if image ${tag} exists locally...`);
-    await $`docker image inspect ${tag}`;
+    await $`docker image inspect ${tag}`.quiet();
     imageExists = true;
     console.log(`✓ Image ${tag} found locally, skipping build`);
 } catch (localError) {
@@ -101,9 +101,10 @@ try {
             imageExists = true;
             console.log(`✓ Pulled ${tag} from registry, skipping build`);
         } catch (pullError) {
-            if (pullError.stderr?.toLowerCase?.().includes("not found") || pullError.stderr?.toLowerCase?.().includes("pull access denied")) {
+            if (pullError.stderr?.includes("not found") || pullError.stderr?.includes("pull access denied")) {
                 console.log("Image not found in registry; will build it");
             } else {
+                console.log(JSON.stringify(pullError.stderr, null, 2));
                 console.error("Unexpected error while pulling image:", pullError);
             }
         }

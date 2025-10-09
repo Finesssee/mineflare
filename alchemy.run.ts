@@ -2,7 +2,7 @@
 
 import alchemy, { type Scope } from "alchemy";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
-import { DurableObjectNamespace, Container, R2Bucket, BunSPA, Worker } from "alchemy/cloudflare";
+import { DurableObjectNamespace, Container, R2Bucket, BunSPA, Worker, Tunnel } from "alchemy/cloudflare";
 import { MinecraftContainer } from "./src/container.ts";
 
 const cloudflareStateStore = (scope: Scope) => new CloudflareStateStore(scope, {
@@ -31,7 +31,8 @@ export const container = await Container<MinecraftContainer>("container3", {
         BASE_DOCKERFILE: baseDockerfile
     }
   },
-  instanceType: "standard-4"
+  instanceType: "standard-4",
+  maxInstances: 1,
 });
 
 // R2 bucket for Dynmap tiles and web UI
@@ -157,6 +158,21 @@ const agentDO = await DurableObjectNamespace("mineflare-agent", {
     sqlite: true,
 });
 
+const AGENT_WORKER_PORT = 3001;
+// let devProps: { tunnel?: Tunnel } = {};
+
+// if (process.env.NODE_ENV === "development") {
+//   const tunnel = await Tunnel("mineflare-tunnel", {
+//     name: `${app.name}-agent-dev-tunnel`,
+//     adopt: true,
+//     ingress: [{
+//       hostname: "mineflare-agent-dev.gptkids.app",
+//       service: `http://localhost:${AGENT_WORKER_PORT}`,
+//     }]
+//   });
+//   devProps.tunnel = tunnel;
+// }
+
 const agentWorker = await Worker("mineflare-agent", {
   name: `${app.name}-agent`,
   entrypoint: "src/agent.ts",
@@ -166,6 +182,10 @@ const agentWorker = await Worker("mineflare-agent", {
     MCP_OBJECT: agentDO,
     MINEFLARE_WORKER: worker // bind to the main worker
   },
+  dev: {
+    port: AGENT_WORKER_PORT,
+    //...devProps as any,
+  }
 });
 
 console.log("Dynmap Worker URL:", dynmapWorker.url);

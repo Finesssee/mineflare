@@ -20,7 +20,7 @@
     "@cloudflare/workers-types": "4.20250926.0",
     "@types/node": "^24.5.2",
     "@types/bun": "^1.2.2",
-    "alchemy": "https://pkg.pr.new/alchemy-run/alchemy@1095",
+    "alchemy": "https://pkg.pr.new/alchemy-run/alchemy@1096",
     "typescript": "^5.9.2",
     "vite": "^5.4.0"
   },

@@ -175,3 +175,6 @@ lerna-debug.log*
 
 .cursor/plans
 .alchemy/
+
+# Local build cache
+docker_src/.BUILD_CONTAINER_SERVICES
