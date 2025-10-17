@@ -176,6 +176,11 @@ async function connect(type: TerminalType) {
         showStatus(`Connected to ${type}`, 'connected');
       }
 
+      // Fit the terminal before sending initial resize (if it's currently visible)
+      if (type === currentTerminal) {
+        instance.fitAddon.fit();
+      }
+
       // Send initial resize using ttyd protocol: binary "1" + JSON
       const resizeJson = JSON.stringify({
         AuthToken: '',
@@ -468,14 +473,24 @@ function doSwitchTerminal(type: TerminalType) {
   // Focus the new terminal
   terminals[type].terminal.focus();
   
-  // Fit the terminal - need to wait for CSS transition/display change to complete
-  // Use requestAnimationFrame to ensure DOM has updated
+  // Multi-stage fitting to ensure proper dimensions
+  // The fadeIn animation takes 0.3s, so we need multiple fits during and after it
+  
+  // Stage 1: Immediate fit after display change
   requestAnimationFrame(() => {
-    setTimeout(() => {
+    terminals[type].fitAddon.fit();
+    
+    // Stage 2: Fit after second animation frame (layout should be stable)
+    requestAnimationFrame(() => {
       terminals[type].fitAddon.fit();
       
-      // Fit again after another frame to ensure correct sizing
-      requestAnimationFrame(() => {
+      // Stage 3: Fit midway through animation (150ms)
+      setTimeout(() => {
+        terminals[type].fitAddon.fit();
+      }, 150);
+      
+      // Stage 4: Final fit after animation completes (350ms to be safe)
+      setTimeout(() => {
         terminals[type].fitAddon.fit();
         
         // Send resize to WebSocket if connected
@@ -487,8 +502,8 @@ function doSwitchTerminal(type: TerminalType) {
           });
           terminals[type].ws!.send(textEncoder.encode(resizeJson));
         }
-      });
-    }, 50);
+      }, 350);
+    });
   });
   
   // Connect if not already connected
