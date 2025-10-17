@@ -117,15 +117,25 @@ try {
 if (!imageExists) {
     console.log(`Building multi-arch image ${tag} for platforms: ${PLATFORMS}...`);
     
-    // Build multi-arch image with buildx and push (buildx requires --push for multi-platform)
-    await $`docker buildx build --platform ${PLATFORMS} --cache-from type=registry,ref=${tag} --cache-to type=inline ${skipPush ? "" : "--push"} -t ${tag} .`
+    // Build multi-arch image with buildx
+    // For multi-platform builds, we need either --push or an output type
+    // When skipping push, just validate the build without exporting
+    const outputFlag = skipPush ? "--output type=cacheonly" : "--push";
+    
+    // Try to use cache from registry (may not exist on first build, that's ok)
+    // Skip --cache-to as it can significantly slow down pushes when layers are cached
+    await $`docker buildx build --platform ${PLATFORMS} --cache-from type=registry,ref=${tag} --progress=plain ${outputFlag} -t ${tag} .`
         .catch((error) => {
             console.error(error)
             console.error("Failed to build multi-arch image")
             process.exit(1)
         })
     
-    console.log(`✓ Successfully built and pushed multi-arch ${tag} for ${PLATFORMS}`);
+    if (skipPush) {
+        console.log(`✓ Successfully validated multi-arch build for ${tag} (${PLATFORMS})`);
+    } else {
+        console.log(`✓ Successfully built and pushed multi-arch ${tag} for ${PLATFORMS}`);
+    }
 }
 
 // Write the repo name and tag to a file using Bun

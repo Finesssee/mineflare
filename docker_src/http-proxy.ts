@@ -8,11 +8,11 @@
  * - HTTP Server (3128): Accept requests from container processes
  */
 
-import { Server, Socket, TCPSocketListener } from "bun";
+import { Socket, TCPSocketListener } from "bun";
 
 const CONTROL_PORT = 8084;
 const DATA_PORT_START = 8085;
-const DATA_PORT_END = 8109;
+const DATA_PORT_END = 8100;
 const HTTP_PORT = 3128;
 const MAX_CHANNELS = DATA_PORT_END - DATA_PORT_START + 1;
 

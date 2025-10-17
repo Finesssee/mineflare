@@ -23,6 +23,9 @@ build/
 *_src/hteetp-linux-*
 *_src/ttyd-*
 *_src/claude-*
+*_src/codex-*
+*_src/gemini-*
+*_src/gemini.js
 
 # Runtime data
 pids

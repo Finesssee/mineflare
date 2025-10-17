@@ -81,7 +81,7 @@ start_tailscale() {
   AUTHKEY="${TS_AUTHKEY:-${TAILSCALE_AUTHKEY:-}}"
   
   # Skip Tailscale if no authkey is provided
-  if [ -z "${AUTHKEY}" ]; then
+  if [ -z "${AUTHKEY}" || "${AUTHKEY}" = "null" ]; then
     echo "Skipping Tailscale (no TS_AUTHKEY found)"
     return
   fi
@@ -113,6 +113,7 @@ start_tailscale() {
       sleep 0.5
     done
 
+    echo "AUTHKEY: ${AUTHKEY}"
     echo "Connecting to Tailscale network..."
     sudo tailscale --socket="${TAILSCALE_SOCKET}" up \
       --authkey="${AUTHKEY}" \
@@ -298,6 +299,146 @@ setup_hteetp() {
   echo "hteetp symlink created successfully"
 }
 
+setup_codex() {
+  echo "Setting up codex binary..."
+  
+  # Detect architecture
+  ARCH=$(uname -m)
+  echo "Detected architecture: $ARCH"
+  
+  # Determine the order to try binaries based on architecture
+  if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
+    # x86_64 system - try x64 first, then arm64
+    BINARIES=("/usr/local/bin/codex-x64" "/usr/local/bin/codex-arm64")
+    NAMES=("x64" "arm64")
+  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+    # ARM64 system - try arm64 first, then x64
+    BINARIES=("/usr/local/bin/codex-arm64" "/usr/local/bin/codex-x64")
+    NAMES=("arm64" "x64")
+  else
+    # Unknown architecture - try both starting with x64
+    echo "Warning: Unknown architecture $ARCH"
+    BINARIES=("/usr/local/bin/codex-x64" "/usr/local/bin/codex-arm64")
+    NAMES=("x64" "arm64")
+  fi
+  
+  CODEX_BINARY=""
+  
+  # Try each binary in order
+  for i in 0 1; do
+    BINARY="${BINARIES[$i]}"
+    NAME="${NAMES[$i]}"
+    
+    if [ ! -x "$BINARY" ]; then
+      echo "Binary $NAME not found or not executable"
+      continue
+    fi
+    
+    echo "Testing $NAME binary..."
+    
+    # Try to execute and check for errors
+    # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
+    if timeout 2 "$BINARY" --version >/dev/null 2>&1; then
+      echo "✓ $NAME binary is compatible"
+      CODEX_BINARY="$BINARY"
+      break
+    else
+      EXIT_CODE=$?
+      if [ $EXIT_CODE -eq 126 ] || [ $EXIT_CODE -eq 133 ]; then
+        echo "✗ $NAME binary: Architecture mismatch (exit code $EXIT_CODE)"
+      elif [ $EXIT_CODE -eq 124 ]; then
+        echo "✓ $NAME binary timed out but seems to work (this is OK)"
+        CODEX_BINARY="$BINARY"
+        break
+      else
+        echo "✗ $NAME binary failed with exit code $EXIT_CODE"
+      fi
+    fi
+  done
+  
+  if [ -z "$CODEX_BINARY" ]; then
+    echo "Error: No compatible codex binary found!"
+    return 1
+  fi
+  
+  echo "Using codex binary: $CODEX_BINARY"
+  
+  # Create symlink
+  sudo ln -sf "$CODEX_BINARY" /usr/local/bin/codex
+  
+  echo "codex symlink created successfully"
+}
+
+setup_gemini() {
+  echo "Setting up gemini binary..."
+  
+  # Detect architecture
+  ARCH=$(uname -m)
+  echo "Detected architecture: $ARCH"
+  
+  # Determine the order to try binaries based on architecture
+  if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
+    # x86_64 system - try x64 first, then arm64
+    BINARIES=("/usr/local/bin/gemini-x64" "/usr/local/bin/gemini-arm64")
+    NAMES=("x64" "arm64")
+  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+    # ARM64 system - try arm64 first, then x64
+    BINARIES=("/usr/local/bin/gemini-arm64" "/usr/local/bin/gemini-x64")
+    NAMES=("arm64" "x64")
+  else
+    # Unknown architecture - try both starting with x64
+    echo "Warning: Unknown architecture $ARCH"
+    BINARIES=("/usr/local/bin/gemini-x64" "/usr/local/bin/gemini-arm64")
+    NAMES=("x64" "arm64")
+  fi
+  
+  GEMINI_BINARY=""
+  
+  # Try each binary in order
+  for i in 0 1; do
+    BINARY="${BINARIES[$i]}"
+    NAME="${NAMES[$i]}"
+    
+    if [ ! -x "$BINARY" ]; then
+      echo "Binary $NAME not found or not executable"
+      continue
+    fi
+    
+    echo "Testing $NAME binary..."
+    
+    # Try to execute and check for errors
+    # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
+    if timeout 2 "$BINARY" --version >/dev/null 2>&1; then
+      echo "✓ $NAME binary is compatible"
+      GEMINI_BINARY="$BINARY"
+      break
+    else
+      EXIT_CODE=$?
+      if [ $EXIT_CODE -eq 126 ] || [ $EXIT_CODE -eq 133 ]; then
+        echo "✗ $NAME binary: Architecture mismatch (exit code $EXIT_CODE)"
+      elif [ $EXIT_CODE -eq 124 ]; then
+        echo "✓ $NAME binary timed out but seems to work (this is OK)"
+        GEMINI_BINARY="$BINARY"
+        break
+      else
+        echo "✗ $NAME binary failed with exit code $EXIT_CODE"
+      fi
+    fi
+  done
+  
+  if [ -z "$GEMINI_BINARY" ]; then
+    echo "Error: No compatible gemini binary found!"
+    return 1
+  fi
+  
+  echo "Using gemini binary: $GEMINI_BINARY"
+  
+  # Create symlink
+  sudo ln -sf "$GEMINI_BINARY" /usr/local/bin/gemini
+  
+  echo "gemini symlink created successfully"
+}
+
 start_file_server() {
   echo "Starting file server on port 8083..."
 
@@ -376,7 +517,7 @@ start_file_server() {
 }
 
 start_ttyd() {
-  echo "Starting web terminal (ttyd) on port 7681..."
+  echo "Starting web terminals (ttyd) for Claude, Codex, and Gemini..."
 
   # Detect architecture
   ARCH=$(uname -m)
@@ -439,24 +580,64 @@ start_ttyd() {
 
   echo "Using ttyd binary: $TTYD_BINARY"
 
-  # Run ttyd in background with auto-restart
+  # Common ttyd client options
+  TTYD_THEME='{"background":"#0a1612","foreground":"#e0e0e0","cursor":"#55FF55","cursorAccent":"#0a1612","selectionBackground":"#57A64E"}'
+
+  # Run ttyd for Claude (port 7681)
   (
     while true; do
-      echo "Starting ttyd (attempt at $(date))"
+      echo "Starting ttyd for Claude (attempt at $(date))"
       $TTYD_BINARY \
         --port 7681 \
         --interface 0.0.0.0 \
-        --base-path /src/terminal \
+        --base-path /src/terminal/claude \
         --writable \
         --client-option fontSize=14 \
-        --client-option 'theme={"background":"#0a1612","foreground":"#e0e0e0","cursor":"#55FF55","cursorAccent":"#0a1612","selectionBackground":"#57A64E"}' \
-        claude || echo "ttyd crashed (exit code: $?), restarting in 2 seconds..."
+        --client-option "theme=$TTYD_THEME" \
+        claude || echo "ttyd (Claude) crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
-  ) >> /logs/ttyd.log 2>&1 &
-  TTYD_PID=$!
+  ) >> /logs/ttyd-claude.log 2>&1 &
+  TTYD_CLAUDE_PID=$!
+  echo "ttyd (Claude) started on port 7681 (PID: $TTYD_CLAUDE_PID)"
 
-  echo "ttyd terminal started in background (PID: $TTYD_PID), logging to /logs/ttyd.log"
+  # Run ttyd for Codex (port 7682)
+  (
+    while true; do
+      echo "Starting ttyd for Codex (attempt at $(date))"
+      $TTYD_BINARY \
+        --port 7682 \
+        --interface 0.0.0.0 \
+        --base-path /src/terminal/codex \
+        --writable \
+        --client-option fontSize=14 \
+        --client-option "theme=$TTYD_THEME" \
+        codex || echo "ttyd (Codex) crashed (exit code: $?), restarting in 2 seconds..."
+      sleep 2
+    done
+  ) >> /logs/ttyd-codex.log 2>&1 &
+  TTYD_CODEX_PID=$!
+  echo "ttyd (Codex) started on port 7682 (PID: $TTYD_CODEX_PID)"
+
+  # Run ttyd for Gemini (port 7683)
+  (
+    while true; do
+      echo "Starting ttyd for Gemini (attempt at $(date))"
+      $TTYD_BINARY \
+        --port 7683 \
+        --interface 0.0.0.0 \
+        --base-path /src/terminal/gemini \
+        --writable \
+        --client-option fontSize=14 \
+        --client-option "theme=$TTYD_THEME" \
+        gemini || echo "ttyd (Gemini) crashed (exit code: $?), restarting in 2 seconds..."
+      sleep 2
+    done
+  ) >> /logs/ttyd-gemini.log 2>&1 &
+  TTYD_GEMINI_PID=$!
+  echo "ttyd (Gemini) started on port 7683 (PID: $TTYD_GEMINI_PID)"
+
+  echo "All ttyd terminals started successfully"
 }
 
 backup_on_shutdown() {
@@ -497,12 +678,23 @@ kill_background_processes() {
     kill -KILL "$FILE_SERVER_PID" 2>/dev/null || true
   fi
 
-  # Kill ttyd process and its children
-  if [ -n "${TTYD_PID:-}" ]; then
-    echo "Killing ttyd (PID: $TTYD_PID) and its children..."
-    # Kill the entire process group
-    pkill -KILL -P "$TTYD_PID" 2>/dev/null || true
-    kill -KILL "$TTYD_PID" 2>/dev/null || true
+  # Kill ttyd processes and their children
+  if [ -n "${TTYD_CLAUDE_PID:-}" ]; then
+    echo "Killing ttyd Claude (PID: $TTYD_CLAUDE_PID) and its children..."
+    pkill -KILL -P "$TTYD_CLAUDE_PID" 2>/dev/null || true
+    kill -KILL "$TTYD_CLAUDE_PID" 2>/dev/null || true
+  fi
+  
+  if [ -n "${TTYD_CODEX_PID:-}" ]; then
+    echo "Killing ttyd Codex (PID: $TTYD_CODEX_PID) and its children..."
+    pkill -KILL -P "$TTYD_CODEX_PID" 2>/dev/null || true
+    kill -KILL "$TTYD_CODEX_PID" 2>/dev/null || true
+  fi
+  
+  if [ -n "${TTYD_GEMINI_PID:-}" ]; then
+    echo "Killing ttyd Gemini (PID: $TTYD_GEMINI_PID) and its children..."
+    pkill -KILL -P "$TTYD_GEMINI_PID" 2>/dev/null || true
+    kill -KILL "$TTYD_GEMINI_PID" 2>/dev/null || true
   fi
 
   # Kill HTTP proxy process and its children
@@ -665,12 +857,20 @@ write_status "Starting HTTP proxy"
 start_http_proxy
 
 # Start Tailscale in background if it's enabled
-start_tailscale
+start_tailscale &
 
 
 # Setup hteetp binary
 write_status "Setting up hteetp"
 setup_hteetp
+
+# Setup codex binary
+write_status "Setting up codex"
+setup_codex
+
+# Setup gemini binary
+write_status "Setting up gemini"
+setup_gemini
 
 # Restore from backups before starting Minecraft server
 write_status "Checking for backups to restore"

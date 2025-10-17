@@ -186,6 +186,36 @@ const elysiaApp = (
       return { success: false, error: error instanceof Error ? error.message : "Failed to update plugin" };
     }
   })
+
+  /**
+   * Execute an RCON command on the Minecraft server
+   */
+  .post("/rcon/execute", async ({ body }: any) => {
+    try {
+      const { command } = body as { command: string };
+      
+      if (!command || typeof command !== 'string') {
+        return { 
+          success: false, 
+          output: '',
+          command: '',
+          error: "Command parameter is required and must be a string" 
+        };
+      }
+      
+      const container = getMinecraftContainer();
+      const result = await container.executeRconCommand(command);
+      return result;
+    } catch (error) {
+      console.error("Failed to execute RCON command:", error);
+      return { 
+        success: false, 
+        output: '',
+        command: '',
+        error: error instanceof Error ? error.message : "Failed to execute RCON command" 
+      };
+    }
+  })
   
   .post("/shutdown", async () => {
     try {
@@ -333,7 +363,7 @@ export default {
 
     console.error("Fetching request", request.url);
     // auth methods do not require auth
-    const skipAuth = request.method === 'OPTIONS' || url.pathname.startsWith('/auth/') || url.protocol.startsWith('ws') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/src/terminal/ws')
+    const skipAuth = request.method === 'OPTIONS' || url.pathname.startsWith('/auth/') || url.protocol.startsWith('ws') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/src/terminal/')
 
     if (!skipAuth) {
       const authError = await requireAuth(request);
@@ -343,7 +373,7 @@ export default {
     }
 
     // Handle WebSocket requests (both terminal and RCON)
-    if (url.protocol.startsWith('ws') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/src/terminal/ws')) {
+    if (url.protocol.startsWith('ws') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/src/terminal/')) {
       const upgradeHeader = request.headers.get("Upgrade");
       if (upgradeHeader === "websocket" || request.method === 'OPTIONS') {
         return this.handleWebSocket(request, url.pathname);

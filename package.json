@@ -4,25 +4,26 @@
   "description": "Alchemy Typescript Project",
   "type": "module",
   "scripts": {
-    "build": "bun ./docker_src/build.ts && bun build:worker",
+    "build": "bun ./docker_src/build.ts && bun run build:mcp-components && bun build:worker",
     "build:worker": "tsc -b",
+    "build:mcp-components": "bun run src/mcp-components/build-all.ts",
     "configure": "alchemy configure",
     "version": "alchemy --version",
     "login": "alchemy login",
     "predeploy": "mkdir -p dist/client && find dist/client -mindepth 1 ! -name '*.png' -delete",
     "deploy": "touch .env && NODE_ENV=production alchemy deploy --env-file .env",
     "destroy": "touch .env && NODE_ENV=production alchemy destroy --env-file .env",
-    "dev": "touch .env && bun ./docker_src/build.ts && NODE_ENV=development alchemy dev --env-file .env",
+    "dev": "touch .env && NODE_ENV=development alchemy dev --env-file .env",
     "dev:spa": "vite"
   },
   "devDependencies": {
     "@cloudflare/containers": "^0.0.28",
     "@cloudflare/workers-types": "4.20250926.0",
     "@types/node": "^24.5.2",
-    "@types/bun": "^1.2.2",
-    "alchemy": "https://pkg.pr.new/alchemy-run/alchemy@1096",
+    "@types/bun": "^1.3.0",
     "typescript": "^5.9.2",
-    "vite": "^5.4.0"
+    "vite": "^5.4.0",
+    "alchemy": "https://pkg.pr.new/alchemy-run/alchemy@1138"
   },
   "dependencies": {
     "@elysiajs/cors": "^1.4.0",

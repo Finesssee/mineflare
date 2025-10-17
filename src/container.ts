@@ -112,10 +112,11 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
     
     // Environment variables passed to the container
     envVars = {
+        TS_AUTHKEY: "null",
         TS_EXTRA_ARGS: "--advertise-exit-node",
         TS_ENABLE_HEALTH_CHECK: "true",
         TS_LOCAL_ADDR_PORT: "0.0.0.0:8080",
-        ...(this.env.TS_AUTHKEY && this.env.TS_AUTHKEY !== "null" ? {TS_AUTHKEY: this.env.TS_AUTHKEY} : {}),
+        
         // Minecraft server configuration
         TYPE: "PAPER",
         EULA: "TRUE",
@@ -193,6 +194,11 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
         } catch (_) {
           this._isPasswordSet = false;
         }
+        this.ctx.waitUntil(this.env.TS_AUTHKEY.get().then(authkey => {
+          if(authkey) {
+            this.envVars.TS_AUTHKEY = authkey;
+          }
+        }));
         this.ctx.waitUntil(this.getStatus().then(async status => {
           if(status !== 'stopped' && status !== 'stopping') {
             console.error("Container is not stopped or stopping, initializing HTTP Proxy in constructor");
@@ -789,9 +795,19 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
 
         console.error("Optional plugins", this.pluginFilenamesToEnable);
         
-        if (url.pathname.startsWith('/src/terminal/ws')) {
-          console.error('terminal websocket');
-          return super.fetch(switchPort(request, 7681));
+        if (url.pathname.startsWith('/src/terminal/')) {
+          // Route to the appropriate ttyd instance based on path
+          let port = 7681; // Default to Claude
+          if (url.pathname.startsWith('/src/terminal/codex/ws')) {
+            port = 7682;
+            console.error('terminal websocket: codex');
+          } else if (url.pathname.startsWith('/src/terminal/gemini/ws')) {
+            port = 7683;
+            console.error('terminal websocket: gemini');
+          } else {
+            console.error('terminal websocket: claude');
+          }
+          return super.fetch(switchPort(request, port));
         }
         if (url.pathname.startsWith('/ws')) {
           console.error('websocket')
@@ -989,30 +1005,59 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
       }
     }
   
-    // Get server info via RCON
-    private async getRconInfo(): Promise<{ 
-      serverType?: string;
-      version?: string; 
-      versionName?: string;
-      versionId?: string;
-      data?: string;
-      series?: string;
-      protocol?: string;
-      buildTime?: string;
-      packResource?: string;
-      packData?: string;
-      stable?: string;
-      motd?: string;
-    }> {
-      if (!this.rcon) {
-        if(!(await this.initRcon())) {
-          return {};
-        }
+  // Execute arbitrary RCON command
+  public async executeRconCommand(command: string): Promise<{ success: boolean; output: string; command: string; error?: string }> {
+    if (!this.rcon) {
+      if(!(await this.initRcon())) {
+        return { 
+          success: false, 
+          output: '',
+          command,
+          error: 'RCON connection not available. Is the server running?' 
+        };
       }
+    }
 
-      try {
-        // Get version info via RCON. Handle weird / thing in vanilla MC
-        const versionResponse = await this.rcon!.then(rcon => rcon.send("version")).then(r => r.split('/').join('\n/').trim());
+    try {
+      const output = await this.rcon!.then(rcon => rcon.send(command));
+      console.error("RCON command executed successfully:", command, "Output:", output);
+      return { success: true, output, command };
+    } catch (error) {
+      console.error("Failed to execute RCON command:", error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      return { 
+        success: false, 
+        output: '',
+        command,
+        error: errorMessage 
+      };
+    }
+  }
+
+  // Get server info via RCON
+  private async getRconInfo(): Promise<{ 
+    serverType?: string;
+    version?: string; 
+    versionName?: string;
+    versionId?: string;
+    data?: string;
+    series?: string;
+    protocol?: string;
+    buildTime?: string;
+    packResource?: string;
+    packData?: string;
+    stable?: string;
+    motd?: string;
+  }> {
+    if (!this.rcon) {
+      if(!(await this.initRcon())) {
+        return {};
+      }
+    }
+
+    try {
+      // Get version info via RCON. Handle weird / thing in vanilla MC
+      const versionResponse = await this.rcon!.then(rcon => rcon.send("version")).then(r => r.split('/').join('\n/').trim());
         
         const info: any = {
           motd: "Minecraft Server"

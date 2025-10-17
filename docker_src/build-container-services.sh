@@ -239,6 +239,119 @@ download_claude() {
     return 0
 }
 
+# Function to download Codex binaries
+download_codex() {
+    local log_file="$LOG_DIR/codex.log"
+    {
+        echo "=== Downloading Codex binaries ==="
+        
+        CODEX_VERSION="rust-v0.46.0"
+        echo "Codex version: $CODEX_VERSION"
+        
+        echo "Downloading codex-linux-x64..."
+        CODEX_URL_X64="https://github.com/openai/codex/releases/download/${CODEX_VERSION}/codex-x86_64-unknown-linux-gnu.tar.gz"
+        if curl -fsSL -o codex-x64.tar.gz "$CODEX_URL_X64"; then
+            echo "✓ Downloaded codex-x64.tar.gz"
+            tar -xzf codex-x64.tar.gz -C .
+            if [ -f "./codex-x86_64-unknown-linux-gnu" ]; then
+                mv ./codex-x86_64-unknown-linux-gnu ./codex-x64
+                chmod +x codex-x64
+                ls -lh ./codex-x64
+                rm -f codex-x64.tar.gz
+            else
+                echo "✗ Failed to extract codex-x64!"
+                return 1
+            fi
+        else
+            echo "✗ Failed to download codex-x64!"
+            return 1
+        fi
+        
+        echo "Downloading codex-linux-arm64..."
+        CODEX_URL_ARM64="https://github.com/openai/codex/releases/download/${CODEX_VERSION}/codex-aarch64-unknown-linux-gnu.tar.gz"
+        if curl -fsSL -o codex-arm64.tar.gz "$CODEX_URL_ARM64"; then
+            echo "✓ Downloaded codex-arm64.tar.gz"
+            tar -xzf codex-arm64.tar.gz -C .
+            if [ -f "./codex-aarch64-unknown-linux-gnu" ]; then
+                mv ./codex-aarch64-unknown-linux-gnu ./codex-arm64
+                chmod +x codex-arm64
+                ls -lh ./codex-arm64
+                rm -f codex-arm64.tar.gz
+            else
+                echo "✗ Failed to extract codex-arm64!"
+                return 1
+            fi
+        else
+            echo "✗ Failed to download codex-arm64!"
+            return 1
+        fi
+        
+        echo "✓ Codex download completed successfully"
+    } &> "$log_file"
+    
+    if [ $? -ne 0 ]; then
+        cat "$log_file"
+        return 1
+    fi
+    cat "$log_file"
+    return 0
+}
+
+# Function to build Gemini CLI binaries
+build_gemini() {
+    local log_file="$LOG_DIR/gemini.log"
+    {
+        echo "=== Building Gemini CLI ==="
+        
+        GEMINI_VERSION="v0.9.0"
+        echo "Gemini CLI version: $GEMINI_VERSION"
+        
+        echo "Downloading gemini.js..."
+        GEMINI_URL="https://github.com/google-gemini/gemini-cli/releases/download/${GEMINI_VERSION}/gemini.js"
+        if curl -fsSL -o gemini.js "$GEMINI_URL"; then
+            echo "✓ Downloaded gemini.js"
+            ls -lh ./gemini.js
+        else
+            echo "✗ Failed to download gemini.js!"
+            return 1
+        fi
+        
+        echo "Compiling gemini.js for linux-x64..."
+        bun build --compile ./gemini.js --target=bun-linux-x64 --outfile=gemini-x64
+        
+        if [ -f "./gemini-x64" ]; then
+            echo "✓ Build successful! Binary created: ./gemini-x64"
+            ls -lh ./gemini-x64
+        else
+            echo "✗ x64 build failed!"
+            return 1
+        fi
+        
+        echo "Compiling gemini.js for linux-arm64..."
+        bun build --compile ./gemini.js --target=bun-linux-arm64 --outfile=gemini-arm64
+        
+        if [ -f "./gemini-arm64" ]; then
+            echo "✓ Build successful! Binary created: ./gemini-arm64"
+            ls -lh ./gemini-arm64
+        else
+            echo "✗ arm64 build failed!"
+            return 1
+        fi
+        
+        # Clean up source file
+        rm -f gemini.js
+        
+        echo "✓ Gemini CLI build completed successfully"
+    } &> "$log_file"
+    
+    if [ $? -ne 0 ]; then
+        cat "$log_file"
+        return 1
+    fi
+    cat "$log_file"
+    return 0
+}
+
 echo ""
 echo "Starting parallel builds and downloads..."
 echo ""
@@ -259,9 +372,15 @@ PID_TTYD=$!
 download_claude &
 PID_CLAUDE=$!
 
+download_codex &
+PID_CODEX=$!
+
+build_gemini &
+PID_GEMINI=$!
+
 # Wait for all tasks and collect exit codes (bash 3.2 compatible)
-PIDS=($PID_HTTP_PROXY $PID_FILE_SERVER $PID_HTEETP $PID_TTYD $PID_CLAUDE)
-TASK_NAMES=("HTTP Proxy build" "File Server build" "hteetp download" "ttyd download" "Claude Code download")
+PIDS=($PID_HTTP_PROXY $PID_FILE_SERVER $PID_HTEETP $PID_TTYD $PID_CLAUDE $PID_CODEX $PID_GEMINI)
+TASK_NAMES=("HTTP Proxy build" "File Server build" "hteetp download" "ttyd download" "Claude Code download" "Codex download" "Gemini CLI build")
 TASK_STATUS=()
 
 # Wait for each task and collect status
@@ -286,6 +405,8 @@ if [ ${#FAILED_TASKS[@]} -eq 0 ]; then
     echo "  - hteetp-linux-x64, hteetp-linux-arm64"
     echo "  - ttyd-x64, ttyd-arm64"
     echo "  - claude-x64, claude-arm64"
+    echo "  - codex-x64, codex-arm64"
+    echo "  - gemini-x64, gemini-arm64"
     exit 0
 else
     echo "✗ The following tasks failed:"

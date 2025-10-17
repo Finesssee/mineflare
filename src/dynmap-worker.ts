@@ -11,11 +11,11 @@ export default class DynmapWorker extends WorkerEntrypoint<typeof dynmapWorker.E
         const url = new URL(request.url);
         if(url.pathname === "/") {
             url.pathname = "/index.html";
-        } else if(this.env.BUCKET_DOMAIN && !url.pathname.startsWith("/tiles/")) {
+        } else if(this.env?.BUCKET_DOMAIN && !url.pathname.startsWith("/tiles/")) {
             // redirect to /
             return Response.redirect(`https://${this.env.BUCKET_DOMAIN}${url.pathname}`, 302);
         }
-        const obj = await this.env.DYNMAP_BUCKET.get(stripLeadingSlash(url.pathname));
+        const obj = await this.env?.DYNMAP_BUCKET.get(stripLeadingSlash(url.pathname));
 
         // Check if this is a tile request
         const isTileRequest = url.pathname.startsWith("/tiles/");
@@ -23,7 +23,7 @@ export default class DynmapWorker extends WorkerEntrypoint<typeof dynmapWorker.E
         // Common headers for iframe embedding
         const embedHeaders = {
             // Allow embedding from any Cloudflare Workers domain and localhost for dev
-"Content-Security-Policy": `frame-ancestors 'self' ${this.env.MINECRAFT_WORKER_URL} http://localhost:* http://127.0.0.1:*`,
+"Content-Security-Policy": `frame-ancestors 'self' ${this.env?.MINECRAFT_WORKER_URL} http://localhost:* http://127.0.0.1:*`,
             // Explicitly allow embedding by setting X-Frame-Options to "ALLOWALL"
             "X-Frame-Options": "ALLOWALL",
         };

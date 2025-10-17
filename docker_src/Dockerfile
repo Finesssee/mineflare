@@ -43,6 +43,10 @@ COPY --chmod=755 ttyd-x64 /usr/local/bin/ttyd-x64
 COPY --chmod=755 ttyd-arm64 /usr/local/bin/ttyd-arm64
 COPY --chmod=755 claude-x64 /usr/local/bin/claude-x64
 COPY --chmod=755 claude-arm64 /usr/local/bin/claude-arm64
+COPY --chmod=755 codex-x64 /usr/local/bin/codex-x64
+COPY --chmod=755 codex-arm64 /usr/local/bin/codex-arm64
+COPY --chmod=755 gemini-x64 /usr/local/bin/gemini-x64
+COPY --chmod=755 gemini-arm64 /usr/local/bin/gemini-arm64
 COPY CLAUDE.md /data/CLAUDE.md
 RUN mkdir -p /run/tailscale \
     && chown -R 1000:1000 /data \
