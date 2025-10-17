@@ -3,7 +3,6 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { DurableObjectNamespace, Container, R2Bucket, BunSPA, Worker, Secret, Tunnel } from "alchemy/cloudflare";
 import { MinecraftContainer } from "./src/container.ts";
 
-
 // We maximize concurrency in this file to ensure that build and depoy are as fast as possible.
 // by using promises everywhere and avoiding any top level awaits.
 
@@ -199,23 +198,30 @@ const [ agentDO, agentWorker] = await Promise.all([agentDOPromise, agentWorkerPr
 console.log("Dynmap Worker URL:", dynmapWorker.url);
 console.log("Agent Worker URL:", agentWorker.url);
 
-const devTunnel = await Tunnel("mineflare-agent-dev-tunnel", {
-  name: `${app.name}-agent-dev`,
-  adopt: true,
-  ingress: [
-    {
-      service: agentWorker.url!.replace(/\/$/, ""),
-      hostname: "mineflare-agent-dev.gptkids.app",
-    },
-    {
-      service: dynmapWorker.url!.replace(/\/$/, ""),
-      hostname: "mineflare-dynmap-dev.gptkids.app",
-    },
-    {
-      service: "http_status:404",
-    }
-  ]
-});
+let devTunnelProcess: Promise<unknown> | undefined;
+if(process.env.NODE_ENV === "development" && process.env.DEV_TUNNEL_AGENT_HOSTNAME && process.env.DEV_TUNNEL_DYNMAP_HOSTNAME) {
+  console.log("Creating dev tunnel for agent and dynmap");
+  const devTunnel = await Tunnel("mineflare-agent-dev-tunnel", {
+    name: `${app.name}-agent-dev`,
+    adopt: true,
+    ingress: [
+      {
+        service: agentWorker.url!.replace(/\/$/, ""),
+        hostname: process.env.DEV_TUNNEL_AGENT_HOSTNAME,
+      },
+      {
+        service: dynmapWorker.url!.replace(/\/$/, ""),
+        hostname: process.env.DEV_TUNNEL_DYNMAP_HOSTNAME,
+      },
+      {
+        service: "http_status:404",
+      }
+    ]
+  });
+
+  devTunnelProcess = Bun.$`cloudflared tunnel run --token ${devTunnel.token.unencrypted}`;
+  console.log("Tunnel URL:", devTunnel.dnsRecords);
+}
 
 export { container, dynmapBucket, dataBucket, agentDO, agentWorker };
 // console.log("Tunnel:", JSON.stringify(devTunnel, null, 2));
@@ -223,7 +229,9 @@ console.log("Dynmap Worker URL:", dynmapWorker.url);
 console.log("Agent Worker URL:", agentWorker.url);
 console.log("Worker URL:", worker.url);
 console.log("Worker backend URL:", worker.apiUrl);
-console.log("Tunnel URL:", devTunnel.dnsRecords);
+
 await app.finalize();
 
-const tunnel = await Bun.$`cloudflared tunnel run --token ${devTunnel.token.unencrypted}`
+if(devTunnelProcess) {
+  await devTunnelProcess;
+}
