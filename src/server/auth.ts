@@ -279,6 +279,16 @@ export const authApp = (
       // When in reset mode, clear existing auth to allow re-setup
       if (isResetMode()) {
         await container.clearAuth();
+        
+        // Clear cached auth data
+        const cache = await caches.open('mf-auth');
+        const symKeyCacheReq = new Request(new URL('/__mf/sym-key-v1', request.url).toString(), { method: 'GET' });
+        const passwordSetCacheReq = new Request(new URL('/__mf/password-set-v1', request.url).toString(), { method: 'GET' });
+        await Promise.all([
+          cache.delete(symKeyCacheReq),
+          cache.delete(passwordSetCacheReq)
+        ]);
+        console.log("Cleared cached auth data");
       }
       console.log("Calling setupPassword on container...");
       const result = await container.setupPassword({ password });
