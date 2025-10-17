@@ -358,10 +358,9 @@ function validateWebSocketUpgrade(request: Request): Response | null {
 }
 
 export default {
-  async fetch(request: Request, env: typeof worker.Env): Promise<Response> {
+  async fetch(request: Request, _env: typeof worker.Env): Promise<Response> {
     const url = new URL(request.url);
 
-    console.error("Fetching request", request.url);
     // auth methods do not require auth
     const skipAuth = request.method === 'OPTIONS' || url.pathname.startsWith('/auth/') || url.protocol.startsWith('ws') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/src/terminal/')
 

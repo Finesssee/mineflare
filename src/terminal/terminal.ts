@@ -76,6 +76,10 @@ const maxReconnectAttempts = 10;
 const textEncoder = new TextEncoder();
 let currentTerminal: TerminalType = 'claude';
 
+// API Key management
+const API_KEY_STORAGE_KEY = 'mineflare_gemini_api_key';
+let pendingTerminalSwitch: TerminalType | null = null;
+
 function createTerminalInstance(type: TerminalType): TerminalInstance {
   const terminal = new Terminal(terminalConfig);
   const fitAddon = new FitAddon();
@@ -86,7 +90,12 @@ function createTerminalInstance(type: TerminalType): TerminalInstance {
   
   const element = document.getElementById(`terminal-${type}`)!;
   terminal.open(element);
-  fitAddon.fit();
+  
+  // Only fit the terminal if it's currently visible (for claude initially)
+  // Others will be fitted when they become visible
+  if (type === 'claude') {
+    fitAddon.fit();
+  }
   
   return {
     terminal,
@@ -174,6 +183,15 @@ async function connect(type: TerminalType) {
         rows: instance.terminal.rows
       });
       instance.ws?.send(textEncoder.encode(resizeJson));
+
+      // Initialize Gemini settings if this is the first connection
+      if (type === 'gemini' && !geminiInitialized) {
+        const apiKey = getGeminiApiKey();
+        if (apiKey) {
+          geminiInitialized = true;
+          initializeGeminiSettings(instance, apiKey);
+        }
+      }
     };
 
     instance.ws.onmessage = (event) => {
@@ -268,23 +286,139 @@ let resizeTimeout: NodeJS.Timeout | number | null = null;
 function handleResize() {
   if (resizeTimeout) clearTimeout(resizeTimeout);
   resizeTimeout = setTimeout(() => {
-    Object.entries(terminals).forEach(([_, instance]) => {
-      instance.fitAddon.fit();
-
-      if (instance.ws && instance.ws.readyState === WebSocket.OPEN) {
-        // Send resize using ttyd protocol: binary "1" + JSON
-        const resizeJson = JSON.stringify({
-          AuthToken: '',
-          columns: instance.terminal.cols,
-          rows: instance.terminal.rows
-        });
-        instance.ws.send(textEncoder.encode(resizeJson));
+    // Fit the current terminal immediately for better responsiveness
+    const currentInstance = terminals[currentTerminal];
+    currentInstance.fitAddon.fit();
+    
+    if (currentInstance.ws && currentInstance.ws.readyState === WebSocket.OPEN) {
+      const resizeJson = JSON.stringify({
+        AuthToken: '',
+        columns: currentInstance.terminal.cols,
+        rows: currentInstance.terminal.rows
+      });
+      currentInstance.ws.send(textEncoder.encode(resizeJson));
+    }
+    
+    // Fit other terminals in the background (they're hidden so dimensions might be wrong,
+    // but we'll refit them when they become visible)
+    Object.entries(terminals).forEach(([type, instance]) => {
+      if (type !== currentTerminal) {
+        try {
+          instance.fitAddon.fit();
+          
+          if (instance.ws && instance.ws.readyState === WebSocket.OPEN) {
+            const resizeJson = JSON.stringify({
+              AuthToken: '',
+              columns: instance.terminal.cols,
+              rows: instance.terminal.rows
+            });
+            instance.ws.send(textEncoder.encode(resizeJson));
+          }
+        } catch (e) {
+          // Hidden terminals might fail to fit, that's ok
+          console.log(`Failed to fit ${type} terminal (it's hidden):`, e);
+        }
       }
     });
   }, 100);
 }
 
 window.addEventListener('resize', handleResize);
+
+// API Key Modal Management
+const modalOverlay = document.getElementById('modal-overlay')!;
+const apiKeyInput = document.getElementById('gemini-api-key') as HTMLInputElement;
+const modalSaveBtn = document.getElementById('modal-save')!;
+const modalCancelBtn = document.getElementById('modal-cancel')!;
+
+function getGeminiApiKey(): string | null {
+  return localStorage.getItem(API_KEY_STORAGE_KEY);
+}
+
+function setGeminiApiKey(key: string) {
+  localStorage.setItem(API_KEY_STORAGE_KEY, key);
+}
+
+function showApiKeyModal() {
+  modalOverlay.classList.add('active');
+  apiKeyInput.value = getGeminiApiKey() || '';
+  apiKeyInput.focus();
+}
+
+function hideApiKeyModal() {
+  modalOverlay.classList.remove('active');
+  apiKeyInput.value = '';
+}
+
+function initializeGeminiSettings(instance: TerminalInstance, apiKey: string) {
+  // Wait for terminal to be ready, then send commands to set up Gemini
+  const commands = [
+    `mkdir -p /data/.gemini\n`,
+    `cat > /data/.gemini/settings.json << 'GEMINI_EOF'\n`,
+    `{\n`,
+    `  "apiKey": "${apiKey}"\n`,
+    `}\n`,
+    `GEMINI_EOF\n`,
+    `export GEMINI_API_KEY="${apiKey}"\n`,
+    `clear\n`,
+    `echo "✨ Gemini API key configured successfully!"\n`,
+    `echo "You can now use Gemini. Try typing your first prompt."\n`,
+    `echo ""\n`
+  ];
+
+  // Send commands after a short delay to ensure connection is established
+  setTimeout(() => {
+    commands.forEach((cmd, index) => {
+      setTimeout(() => {
+        if (instance.ws && instance.ws.readyState === WebSocket.OPEN) {
+          const encoded = textEncoder.encode(cmd);
+          const message = new Uint8Array(encoded.length + 1);
+          message[0] = '0'.charCodeAt(0);
+          message.set(encoded, 1);
+          instance.ws.send(message);
+        }
+      }, index * 50); // Small delay between commands
+    });
+  }, 500);
+}
+
+// Modal event handlers
+modalSaveBtn.addEventListener('click', () => {
+  const apiKey = apiKeyInput.value.trim();
+  if (!apiKey) {
+    apiKeyInput.focus();
+    return;
+  }
+  
+  setGeminiApiKey(apiKey);
+  hideApiKeyModal();
+  
+  // If there was a pending terminal switch, complete it now
+  if (pendingTerminalSwitch === 'gemini') {
+    pendingTerminalSwitch = null;
+    doSwitchTerminal('gemini');
+  }
+});
+
+modalCancelBtn.addEventListener('click', () => {
+  hideApiKeyModal();
+  pendingTerminalSwitch = null;
+});
+
+// Close modal on Escape key
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && modalOverlay.classList.contains('active')) {
+    hideApiKeyModal();
+    pendingTerminalSwitch = null;
+  }
+});
+
+// Allow Enter key to save
+apiKeyInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    modalSaveBtn.click();
+  }
+});
 
 // Handle tab switching
 const tabs = document.querySelectorAll('.tab');
@@ -298,6 +432,17 @@ tabs.forEach(tab => {
 });
 
 function switchTerminal(type: TerminalType) {
+  // Check if Gemini requires API key
+  if (type === 'gemini' && !getGeminiApiKey()) {
+    pendingTerminalSwitch = type;
+    showApiKeyModal();
+    return;
+  }
+  
+  doSwitchTerminal(type);
+}
+
+function doSwitchTerminal(type: TerminalType) {
   if (type === currentTerminal) return;
   
   // Update active tab
@@ -323,10 +468,28 @@ function switchTerminal(type: TerminalType) {
   // Focus the new terminal
   terminals[type].terminal.focus();
   
-  // Fit the terminal
-  setTimeout(() => {
-    terminals[type].fitAddon.fit();
-  }, 100);
+  // Fit the terminal - need to wait for CSS transition/display change to complete
+  // Use requestAnimationFrame to ensure DOM has updated
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      terminals[type].fitAddon.fit();
+      
+      // Fit again after another frame to ensure correct sizing
+      requestAnimationFrame(() => {
+        terminals[type].fitAddon.fit();
+        
+        // Send resize to WebSocket if connected
+        if (terminals[type].ws && terminals[type].ws!.readyState === WebSocket.OPEN) {
+          const resizeJson = JSON.stringify({
+            AuthToken: '',
+            columns: terminals[type].terminal.cols,
+            rows: terminals[type].terminal.rows
+          });
+          terminals[type].ws!.send(textEncoder.encode(resizeJson));
+        }
+      });
+    }, 50);
+  });
   
   // Connect if not already connected
   if (!terminals[type].connected) {
@@ -338,6 +501,9 @@ function switchTerminal(type: TerminalType) {
     showStatus(`Connecting to ${type}...`, 'connecting');
   }
 }
+
+// Track if Gemini has been initialized
+let geminiInitialized = false;
 
 // Focus initial terminal
 terminals.claude.terminal.focus();

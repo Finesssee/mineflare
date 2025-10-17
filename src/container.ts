@@ -5,7 +5,7 @@ import type { Response as CloudflareResponse } from '@cloudflare/workers-types'
 import { Rcon } from "./lib/rcon";
 import { array, string } from "zod";
 
-
+type Env = typeof worker.Env;
 interface CloudflareTCPSocket {
   get readable(): ReadableStream;
   get writable(): WritableStream;
@@ -101,7 +101,7 @@ const PLUGIN_SPECS = [
   },
 ] as const;
 
-export class MinecraftContainer extends Container<typeof worker.Env> {
+export class MinecraftContainer extends Container {
 
     private lastRconSuccess: Date | null = null;
     private _isPasswordSet: boolean = false;
@@ -137,9 +137,9 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
         // Worker URL for R2 proxy (used by Dynmap and backup system)
         // Uses S3 path-style URLs: https://endpoint/bucket-name/key-name
         AWS_ENDPOINT_URL: "http://localhost:3128",
-        DYNMAP_BUCKET: this.env.DYNMAP_BUCKET_NAME,
+        DYNMAP_BUCKET: (this.env as Env).DYNMAP_BUCKET_NAME,
         // Bucket for world data backups (uses same bucket as Dynmap by default)
-        DATA_BUCKET_NAME: this.env.DATA_BUCKET_NAME || this.env.DYNMAP_BUCKET_NAME,
+        DATA_BUCKET_NAME: (this.env as Env).DATA_BUCKET_NAME || (this.env as Env).DYNMAP_BUCKET_NAME,
         OPTIONAL_PLUGINS: this.pluginFilenamesToEnable.join(" "), // space separated for consumption by bash script start-with-services.sh
     };
     
@@ -194,7 +194,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
         } catch (_) {
           this._isPasswordSet = false;
         }
-        this.ctx.waitUntil(this.env.TS_AUTHKEY.get().then(authkey => {
+        this.ctx.waitUntil((this.env as Env).TS_AUTHKEY.get().then(authkey => {
           if(authkey) {
             this.envVars.TS_AUTHKEY = authkey;
           }
@@ -1391,10 +1391,10 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
           pathname = "/" + pathname;
         }
       }
-      const publicBucketName = this.env.DYNMAP_BUCKET_NAME;
-      const privateBucketName = this.env.DATA_BUCKET_NAME;
+      const publicBucketName = (this.env as Env).DYNMAP_BUCKET_NAME;
+      const privateBucketName = (this.env as Env).DATA_BUCKET_NAME;
       // default to public bucket
-      let bucketToUse = this.env.DYNMAP_BUCKET;
+      let bucketToUse = (this.env as Env).DYNMAP_BUCKET;
       console.error("Fetching from R2", url.pathname);
       if (publicBucketName && pathname.startsWith(`/${publicBucketName}`)) {
         // Strip the bucket name prefix
@@ -1402,7 +1402,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
         if(pathname === "") {
           pathname = "/";
         }
-        bucketToUse = this.env.DYNMAP_BUCKET;
+        bucketToUse = (this.env as Env).DYNMAP_BUCKET;
       }
       else if (privateBucketName && pathname.startsWith(`/${privateBucketName}`)) {
         // Strip the bucket name prefix
@@ -1410,7 +1410,7 @@ export class MinecraftContainer extends Container<typeof worker.Env> {
         if(pathname === "") {
           pathname = "/";
         }
-        bucketToUse = this.env.DATA_BUCKET;
+        bucketToUse = (this.env as Env).DATA_BUCKET;
       }
       
       if(pathname === "/") {

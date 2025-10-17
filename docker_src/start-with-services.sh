@@ -81,8 +81,12 @@ start_tailscale() {
   AUTHKEY="${TS_AUTHKEY:-${TAILSCALE_AUTHKEY:-}}"
   
   # Skip Tailscale if no authkey is provided
-  if [ -z "${AUTHKEY}" || "${AUTHKEY}" = "null" ]; then
+  if [ -z "${AUTHKEY}"]; then
     echo "Skipping Tailscale (no TS_AUTHKEY found)"
+    return
+  fi
+  if [ "${AUTHKEY}" = "null" ]; then
+    echo "Skipping Tailscale (TS_AUTHKEY is null)"
     return
   fi
   

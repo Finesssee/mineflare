@@ -721,6 +721,9 @@ class FileServer {
         tempFile,
         "-C",
         parentDir,
+        "--overwrite",           // Force overwrite existing files
+        "--no-same-permissions", // Don't preserve permissions (avoid utime errors)
+        "--no-same-owner",       // Don't preserve ownership
       ]);
 
       const tarExit = await tarProc.exited;
@@ -750,7 +753,7 @@ class FileServer {
       return this.jsonResponse(result);
     } catch (error: any) {
       const errorMsg = `Restore failed: ${error.message}`;
-      console.error(`[FileServer] ${errorMsg}`);
+      console.error(`[FileServer] ${errorMsg}`, error);
       console.error(error.stack);
 
       return this.jsonResponse({ error: errorMsg }, { status: 500 });
