@@ -11,6 +11,13 @@
  * - GET /path/to/directory?restore=<backup_filename> - Fetch backup from R2 and restore to directory
  * - GET /path/to/directory?list_backups=true - List available backups for the directory
  * 
+ * Features:
+ * - Multipart concurrent downloads with retries for large files (>= 50 MB)
+ * - Automatic HEAD request to check file size before downloading
+ * - Configurable chunk size (10 MB) and concurrent download limit (5 chunks at once)
+ * - Per-chunk retry logic with exponential backoff
+ * - Automatic reconstitution of file from downloaded parts
+ * 
  * Why reverse-epoch filenames?
  * - S3-compatible storage (including Cloudflare R2) returns ListObjects results
  *   in lexicographic (alphabetical) ascending order only. There is no server-side
@@ -82,6 +89,11 @@ interface ListBackupsResult {
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 
+// Multipart download configuration
+const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024; // 50 MB
+const DOWNLOAD_CHUNK_SIZE = 10 * 1024 * 1024;  // 10 MB per chunk
+const MAX_CONCURRENT_DOWNLOADS = 5;            // Download 5 chunks at once
+
 // /**
 //  * Retry wrapper for fetch requests to cloud storage
 //  * Retries up to MAX_RETRIES times with exponential backoff
@@ -120,6 +132,154 @@ const RETRY_DELAY_MS = 1000;
 //     `${operationName} failed after ${MAX_RETRIES} attempts: ${lastError?.message}`
 //   );
 // }
+
+/**
+ * Download a specific byte range from S3 with retries
+ */
+async function downloadRangeWithRetry(
+  s3Client: S3Client,
+  key: string,
+  start: number,
+  end: number,
+  partNumber: number,
+  totalParts: number
+): Promise<ArrayBuffer> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      console.log(
+        `[FileServer] Downloading part ${partNumber}/${totalParts} (bytes ${start}-${end}): Attempt ${attempt}/${MAX_RETRIES}`
+      );
+      
+      // Construct direct S3 URL for range request
+      const endpoint = process.env.AWS_ENDPOINT_URL;
+      const bucket = process.env.DATA_BUCKET_NAME || process.env.DYNMAP_BUCKET;
+      const url = `${endpoint}/${bucket}/${key}`;
+      
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "Range": `bytes=${start}-${end}`,
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const data = await response.arrayBuffer();
+      console.log(
+        `[FileServer] Successfully downloaded part ${partNumber}/${totalParts} (${data.byteLength} bytes)`
+      );
+      
+      return data;
+    } catch (error: any) {
+      lastError = error;
+      console.warn(
+        `[FileServer] Part ${partNumber}/${totalParts} download attempt ${attempt}/${MAX_RETRIES} failed: ${error.message}`
+      );
+      
+      if (attempt < MAX_RETRIES) {
+        const delayMs = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        console.log(`[FileServer] Retrying part ${partNumber} in ${delayMs}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  
+  throw new Error(
+    `Failed to download part ${partNumber}/${totalParts} after ${MAX_RETRIES} attempts: ${lastError?.message}`
+  );
+}
+
+/**
+ * Download large file from S3 using concurrent multipart downloads
+ */
+async function downloadLargeFile(
+  s3Client: S3Client,
+  key: string,
+  tempFile: string,
+  fileSize: number
+): Promise<void> {
+  console.log(
+    `[FileServer] Starting multipart download: ${key} (${(fileSize / (1024 * 1024)).toFixed(2)} MB)`
+  );
+  
+  // Calculate number of parts
+  const numParts = Math.ceil(fileSize / DOWNLOAD_CHUNK_SIZE);
+  console.log(`[FileServer] Splitting download into ${numParts} parts of ~${(DOWNLOAD_CHUNK_SIZE / (1024 * 1024)).toFixed(2)} MB each`);
+  
+  // Create array of download tasks
+  const downloadTasks: Array<{
+    partNumber: number;
+    start: number;
+    end: number;
+    tempFile: string;
+  }> = [];
+  
+  for (let i = 0; i < numParts; i++) {
+    const start = i * DOWNLOAD_CHUNK_SIZE;
+    const end = Math.min(start + DOWNLOAD_CHUNK_SIZE - 1, fileSize - 1);
+    downloadTasks.push({
+      partNumber: i + 1,
+      start,
+      end,
+      tempFile: `${tempFile}.part${i}`,
+    });
+  }
+  
+  // Download parts concurrently with controlled concurrency
+  const downloadPart = async (task: typeof downloadTasks[0]) => {
+    const data = await downloadRangeWithRetry(
+      s3Client,
+      key,
+      task.start,
+      task.end,
+      task.partNumber,
+      numParts
+    );
+    
+    // Write part to temp file
+    await Bun.write(task.tempFile, data);
+    console.log(`[FileServer] Wrote part ${task.partNumber}/${numParts} to ${task.tempFile}`);
+  };
+  
+  // Process downloads with controlled concurrency
+  const results: Promise<void>[] = [];
+  for (let i = 0; i < downloadTasks.length; i += MAX_CONCURRENT_DOWNLOADS) {
+    const batch = downloadTasks.slice(i, i + MAX_CONCURRENT_DOWNLOADS);
+    console.log(
+      `[FileServer] Starting batch ${Math.floor(i / MAX_CONCURRENT_DOWNLOADS) + 1}/${Math.ceil(numParts / MAX_CONCURRENT_DOWNLOADS)}: parts ${batch[0].partNumber}-${batch[batch.length - 1].partNumber}`
+    );
+    
+    const batchPromises = batch.map(task => downloadPart(task));
+    await Promise.all(batchPromises);
+    results.push(...batchPromises);
+  }
+  
+  console.log(`[FileServer] All parts downloaded successfully, reconstituting file...`);
+  
+  // Reconstitute the file from parts
+  const targetFile = Bun.file(tempFile).writer();
+  
+  for (let i = 0; i < numParts; i++) {
+    const partFile = `${tempFile}.part${i}`;
+    const partData = await Bun.file(partFile).arrayBuffer();
+    targetFile.write(partData);
+    
+    // Clean up part file
+    try {
+      await unlink(partFile);
+    } catch (e) {
+      console.warn(`[FileServer] Failed to clean up part file ${partFile}: ${e}`);
+    }
+  }
+  
+  await targetFile.end();
+  
+  console.log(`[FileServer] File reconstituted successfully: ${tempFile}`);
+}
 
 /**
  * Create an S3Client instance with credentials from environment variables
@@ -670,25 +830,34 @@ class FileServer {
         );
       }
 
-      console.log(`[FileServer] Downloading from S3: ${backupFilename}`);
+      console.log(`[FileServer] Checking file size for: ${backupFilename}`);
 
-      // // Check if the backup exists first
-      const s3File = s3Client.file(backupFilename);
-      // const exists = await s3File.exists();
+      // First, check the file size with a HEAD request
+      const endpoint = process.env.AWS_ENDPOINT_URL;
+      const bucket = process.env.DATA_BUCKET_NAME || process.env.DYNMAP_BUCKET;
+      const headUrl = `${endpoint}/${bucket}/${backupFilename}`;
       
-      // if (!exists) {
-      //   return new Response(
-      //     JSON.stringify({ 
-      //       error: `Backup not found: ${backupFilename}`,
-      //     }),
-      //     {
-      //       status: 404,
-      //       headers: { "Content-Type": "application/json" },
-      //     }
-      //   );
-      // }
+      const headResponse = await fetch(headUrl, { method: "HEAD" });
+      
+      if (!headResponse.ok) {
+        return new Response(
+          JSON.stringify({ 
+            error: `Backup not found: ${backupFilename}`,
+          }),
+          {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+      
+      const contentLength = headResponse.headers.get("Content-Length");
+      const fileSize = contentLength ? parseInt(contentLength, 10) : 0;
+      const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(2);
+      
+      console.log(`[FileServer] Backup file size: ${fileSize} bytes (${fileSizeMB} MB)`);
 
-      // Save to temp file - stream directly to disk without loading into memory
+      // Save to temp file
       const timestamp = new Date()
         .toISOString()
         .replace(/[-:]/g, "")
@@ -696,9 +865,19 @@ class FileServer {
         .replace("T", "_");
       const tempFile = `/tmp/restore_${timestamp}.tar.gz`;
       
-      // Download from S3 and write to temp file
-      const fileData = await s3File.arrayBuffer();
-      await Bun.write(tempFile, fileData);
+      // Use multipart download for large files, simple download for small files
+      if (fileSize >= LARGE_FILE_THRESHOLD) {
+        console.log(
+          `[FileServer] File is large (>= ${(LARGE_FILE_THRESHOLD / (1024 * 1024)).toFixed(0)} MB), using multipart download`
+        );
+        await downloadLargeFile(s3Client, backupFilename, tempFile, fileSize);
+      } else {
+        console.log(`[FileServer] File is small, using simple download`);
+        const s3File = s3Client.file(backupFilename);
+        const fileData = await s3File.arrayBuffer();
+        await Bun.write(tempFile, fileData);
+        console.log(`[FileServer] Downloaded ${fileData.byteLength} bytes to ${tempFile}`);
+      }
 
       // Get file size from written file
       const restoredFile = Bun.file(tempFile);
@@ -721,9 +900,11 @@ class FileServer {
         tempFile,
         "-C",
         parentDir,
+        "--unlink-first",        // Remove each file prior to extracting over it
         "--overwrite",           // Force overwrite existing files
         "--no-same-permissions", // Don't preserve permissions (avoid utime errors)
         "--no-same-owner",       // Don't preserve ownership
+        "--touch",               // Don't extract file modified time (avoids utime errors)
       ]);
 
       const tarExit = await tarProc.exited;

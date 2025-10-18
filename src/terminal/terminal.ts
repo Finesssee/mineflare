@@ -272,10 +272,40 @@ async function connect(type: TerminalType) {
   }
 }
 
-// Handle terminal input for all terminals
-Object.entries(terminals).forEach(([type, instance]) => {
+// Track data handlers to prevent duplicate setup
+const dataHandlersSetup: Set<TerminalType> = new Set();
+
+function setupTerminalDataHandler(type: TerminalType) {
+  if (dataHandlersSetup.has(type)) return;
+  
+  const instance = terminals[type];
   instance.terminal.onData((data) => {
-    if (instance.ws && instance.ws.readyState === WebSocket.OPEN) {
+    // Only send data if this is the current terminal and WebSocket is open
+    if (type === currentTerminal && instance.ws && instance.ws.readyState === WebSocket.OPEN) {
+      // Filter out terminal initialization/query sequences that xterm.js might send
+      // These are not user input and can confuse the shell
+      
+      // Check for ESC sequences (0x1B)
+      if (data.includes('\x1B')) {
+        // Filter OSC (Operating System Command) sequences - typically \x1B]
+        if (data.includes('\x1B]')) {
+          console.log(`Filtered OSC sequence from ${type}`);
+          return;
+        }
+        
+        // Filter CSI (Control Sequence Introducer) queries - \x1B[
+        if (data.includes('\x1B[') && (data.includes('c') || data.includes('n'))) {
+          console.log(`Filtered CSI query from ${type}`);
+          return;
+        }
+      }
+      
+      // Filter standalone color query responses (like "10;rgb:...")
+      if (data.match(/^\d+;rgb:/)) {
+        console.log(`Filtered color query response from ${type}`);
+        return;
+      }
+      
       // Send input using ttyd protocol: binary with first byte '0' (INPUT)
       const encoded = textEncoder.encode(data);
       const message = new Uint8Array(encoded.length + 1);
@@ -284,7 +314,12 @@ Object.entries(terminals).forEach(([type, instance]) => {
       instance.ws.send(message);
     }
   });
-});
+  
+  dataHandlersSetup.add(type);
+}
+
+// Setup data handler for Claude (initially visible)
+setupTerminalDataHandler('claude');
 
 // Handle terminal resize
 let resizeTimeout: NodeJS.Timeout | number | null = null;
@@ -365,13 +400,15 @@ function initializeGeminiSettings(instance: TerminalInstance, apiKey: string) {
     `}\n`,
     `GEMINI_EOF\n`,
     `export GEMINI_API_KEY="${apiKey}"\n`,
-    `clear\n`,
-    `echo "✨ Gemini API key configured successfully!"\n`,
-    `echo "You can now use Gemini. Try typing your first prompt."\n`,
+    `echo ""\n`,
+    `echo -e "\\033[1;32m✓ Gemini API key configured!\\033[0m"\n`,
+    `echo "Your API key has been saved to /data/.gemini/settings.json"\n`,
+    `echo ""\n`,
+    `echo "You can now run: gemini"\n`,
     `echo ""\n`
   ];
 
-  // Send commands after a short delay to ensure connection is established
+  // Send commands after a delay to ensure the terminal has shown the welcome message
   setTimeout(() => {
     commands.forEach((cmd, index) => {
       setTimeout(() => {
@@ -382,9 +419,9 @@ function initializeGeminiSettings(instance: TerminalInstance, apiKey: string) {
           message.set(encoded, 1);
           instance.ws.send(message);
         }
-      }, index * 50); // Small delay between commands
+      }, index * 80); // Slightly longer delay between commands
     });
-  }, 500);
+  }, 1500); // Wait longer for terminal to be fully ready
 }
 
 // Modal event handlers
@@ -449,6 +486,9 @@ function switchTerminal(type: TerminalType) {
 
 function doSwitchTerminal(type: TerminalType) {
   if (type === currentTerminal) return;
+  
+  // Setup data handler for this terminal if not already done
+  setupTerminalDataHandler(type);
   
   // Update active tab
   tabs.forEach(tab => {

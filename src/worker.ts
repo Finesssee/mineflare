@@ -278,7 +278,15 @@ const elysiaApp = (
     }
   })
   .get("/startup-status", async () => {
-    return Response.redirect("/api/status", 302);
+    try {
+      const container = getMinecraftContainer();
+      const response = await container.fetch(new Request("http://localhost/startup-status"));
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error("Failed to get startup status", error);
+      return { status: 'stopped', startupStep: null, error: "Failed to get startup status" };
+    }
   })
 
   .compile()

@@ -584,10 +584,162 @@ start_ttyd() {
 
   echo "Using ttyd binary: $TTYD_BINARY"
 
+  # Setup tmux socket directory with proper permissions
+  echo "Setting up tmux environment..."
+  sudo mkdir -p /tmp/tmux-1000
+  sudo chown 1000:1000 /tmp/tmux-1000
+  sudo chmod 700 /tmp/tmux-1000
+  
+  # Remove any stale socket files (from previous container runs)
+  if [ -e /tmp/tmux-1000/default ]; then
+    echo "Removing stale tmux socket..."
+    rm -f /tmp/tmux-1000/default
+  fi
+  
+  echo "✓ tmux environment ready (server will start when first terminal connects)"
+
   # Common ttyd client options
   TTYD_THEME='{"background":"#0a1612","foreground":"#e0e0e0","cursor":"#55FF55","cursorAccent":"#0a1612","selectionBackground":"#57A64E"}'
 
-  # Run ttyd for Claude (port 7681)
+  # Create wrapper scripts for resilient tmux session management
+  # These scripts will recreate sessions if they die or don't exist
+  
+  cat > /tmp/tmux-claude.sh << 'TMUX_CLAUDE_EOF'
+#!/bin/bash
+SESSION_NAME="claude"
+
+# Ensure proper environment
+export TERM=${TERM:-xterm-256color}
+
+# Check for TTY
+if [ ! -t 1 ]; then
+  echo "ERROR: No TTY available (missing -t flag)"
+  sleep 5
+  exit 1
+fi
+
+# Wait for symlinks
+sleep 1
+
+while true; do
+  # Clean up stale socket if server isn't responding
+  if [ -S /tmp/tmux-1000/default ] && ! tmux list-sessions 2>/dev/null; then
+    echo "Cleaning stale tmux socket..."
+    rm -f /tmp/tmux-1000/default
+  fi
+  
+  # Check if session exists and has a running process
+  if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    # Session exists, check if it has a live process
+    if tmux list-panes -t "$SESSION_NAME" -F "#{pane_pid}" 2>/dev/null | xargs -I {} ps -p {} >/dev/null 2>&1; then
+      # Session is alive, just attach to it (allows multiple clients)
+      echo "Attaching to existing $SESSION_NAME session..."
+      tmux attach -t "$SESSION_NAME"
+    else
+      # Session exists but process is dead, kill it
+      echo "Found dead $SESSION_NAME session, cleaning up..."
+      tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+      sleep 1
+      continue
+    fi
+  else
+    # No session exists, create bash shell with instructions
+    echo "Creating new $SESSION_NAME session..."
+    tmux new-session -s "$SESSION_NAME" bash -c 'echo -e "\033[1;32m✨ Claude Code Terminal\033[0m"; echo ""; echo "Run '\''claude'\'' to start an interactive session."; echo "Run '\''claude exec <prompt>'\'' for one-shot commands."; echo ""; exec bash'
+  fi
+  
+  # If we get here, we were detached or session ended
+  echo "$SESSION_NAME detached, waiting before reconnect..."
+  sleep 2
+done
+TMUX_CLAUDE_EOF
+  chmod +x /tmp/tmux-claude.sh
+
+  cat > /tmp/tmux-codex.sh << 'TMUX_CODEX_EOF'
+#!/bin/bash
+SESSION_NAME="codex"
+
+export TERM=${TERM:-xterm-256color}
+
+if [ ! -t 1 ]; then
+  echo "ERROR: No TTY available (missing -t flag)"
+  sleep 5
+  exit 1
+fi
+
+sleep 1
+
+while true; do
+  if [ -S /tmp/tmux-1000/default ] && ! tmux list-sessions 2>/dev/null; then
+    echo "Cleaning stale tmux socket..."
+    rm -f /tmp/tmux-1000/default
+  fi
+  
+  if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    if tmux list-panes -t "$SESSION_NAME" -F "#{pane_pid}" 2>/dev/null | xargs -I {} ps -p {} >/dev/null 2>&1; then
+      echo "Attaching to existing $SESSION_NAME session..."
+      tmux attach -t "$SESSION_NAME"
+    else
+      echo "Found dead $SESSION_NAME session, cleaning up..."
+      tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+      sleep 1
+      continue
+    fi
+  else
+    echo "Creating new $SESSION_NAME session..."
+    tmux new-session -s "$SESSION_NAME" bash -c 'echo -e "\033[1;33m⚡ OpenAI Codex Terminal\033[0m"; echo ""; echo "Run '\''codex'\'' to start an interactive session."; echo "Run '\''codex exec <prompt>'\'' for one-shot commands."; echo ""; exec bash'
+  fi
+  
+  echo "$SESSION_NAME detached, waiting before reconnect..."
+  sleep 2
+done
+TMUX_CODEX_EOF
+  chmod +x /tmp/tmux-codex.sh
+
+  cat > /tmp/tmux-gemini.sh << 'TMUX_GEMINI_EOF'
+#!/bin/bash
+SESSION_NAME="gemini"
+
+export TERM=${TERM:-xterm-256color}
+
+if [ ! -t 1 ]; then
+  echo "ERROR: No TTY available (missing -t flag)"
+  sleep 5
+  exit 1
+fi
+
+sleep 1
+
+while true; do
+  if [ -S /tmp/tmux-1000/default ] && ! tmux list-sessions 2>/dev/null; then
+    echo "Cleaning stale tmux socket..."
+    rm -f /tmp/tmux-1000/default
+  fi
+  
+  if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    if tmux list-panes -t "$SESSION_NAME" -F "#{pane_pid}" 2>/dev/null | xargs -I {} ps -p {} >/dev/null 2>&1; then
+      echo "Attaching to existing $SESSION_NAME session..."
+      tmux attach -t "$SESSION_NAME"
+    else
+      echo "Found dead $SESSION_NAME session, cleaning up..."
+      tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+      sleep 1
+      continue
+    fi
+  else
+    echo "Creating new $SESSION_NAME session..."
+    tmux new-session -s "$SESSION_NAME" bash -c 'echo -e "\033[1;35m✨ Google Gemini Terminal\033[0m"; echo ""; echo "Run '\''gemini'\'' to start an interactive session."; echo "Configure your API key in /data/.gemini/settings.json first."; echo ""; exec bash'
+  fi
+  
+  echo "$SESSION_NAME detached, waiting before reconnect..."
+  sleep 2
+done
+TMUX_GEMINI_EOF
+  chmod +x /tmp/tmux-gemini.sh
+
+  echo "✓ Created tmux wrapper scripts"
+
+  # Run ttyd for Claude (port 7681) - uses resilient tmux wrapper
   (
     while true; do
       echo "Starting ttyd for Claude (attempt at $(date))"
@@ -598,14 +750,14 @@ start_ttyd() {
         --writable \
         --client-option fontSize=14 \
         --client-option "theme=$TTYD_THEME" \
-        claude || echo "ttyd (Claude) crashed (exit code: $?), restarting in 2 seconds..."
+        /tmp/tmux-claude.sh || echo "ttyd (Claude) crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/ttyd-claude.log 2>&1 &
   TTYD_CLAUDE_PID=$!
   echo "ttyd (Claude) started on port 7681 (PID: $TTYD_CLAUDE_PID)"
 
-  # Run ttyd for Codex (port 7682)
+  # Run ttyd for Codex (port 7682) - uses resilient tmux wrapper
   (
     while true; do
       echo "Starting ttyd for Codex (attempt at $(date))"
@@ -616,14 +768,14 @@ start_ttyd() {
         --writable \
         --client-option fontSize=14 \
         --client-option "theme=$TTYD_THEME" \
-        codex || echo "ttyd (Codex) crashed (exit code: $?), restarting in 2 seconds..."
+        /tmp/tmux-codex.sh || echo "ttyd (Codex) crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/ttyd-codex.log 2>&1 &
   TTYD_CODEX_PID=$!
   echo "ttyd (Codex) started on port 7682 (PID: $TTYD_CODEX_PID)"
 
-  # Run ttyd for Gemini (port 7683)
+  # Run ttyd for Gemini (port 7683) - uses resilient tmux wrapper
   (
     while true; do
       echo "Starting ttyd for Gemini (attempt at $(date))"
@@ -634,7 +786,7 @@ start_ttyd() {
         --writable \
         --client-option fontSize=14 \
         --client-option "theme=$TTYD_THEME" \
-        gemini || echo "ttyd (Gemini) crashed (exit code: $?), restarting in 2 seconds..."
+        /tmp/tmux-gemini.sh || echo "ttyd (Gemini) crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/ttyd-gemini.log 2>&1 &

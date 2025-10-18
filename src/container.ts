@@ -1761,7 +1761,6 @@ export class MinecraftContainer extends Container {
           if (uploadId && partNumberParam) {
             // Upload a single part of a multipart upload
             const partNumber = parseInt(partNumberParam, 10);
-            console.error(`Uploading part ${partNumber} for uploadId ${uploadId}`);
             
             if (!request.body) {
               return new Response(`<?xml version="1.0" encoding="UTF-8"?>
@@ -2494,7 +2493,6 @@ class HTTPProxyControl {
         const request = await this.readHTTPRequest(channel);
         
         // Make the actual fetch request
-        console.error(`Proxying ${request.method} ${request.url}`);
         const response = await this.fetchImplementation(request);
         
         // Send HTTP response back to the data channel

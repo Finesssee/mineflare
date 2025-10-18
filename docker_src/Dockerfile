@@ -19,11 +19,14 @@ RUN apt-get update \
         curl \
         ca-certificates \
         sudo \
+        tmux \
+        ncurses-term \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && mkdir -p $(dirname "${TAILSCALE_STATE_DIR}") \
     && mkdir -p /data/plugins \
     && echo "minecraft ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/minecraft \
     && chmod 0440 /etc/sudoers.d/minecraft \
+    && echo 'export TERM=xterm-256color' >> /etc/profile \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Minecraft plugin development dependencies
