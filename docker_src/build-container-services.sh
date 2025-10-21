@@ -150,15 +150,42 @@ download_hteetp() {
 download_ttyd() {
     local log_file="$LOG_DIR/ttyd.log"
     {
-        echo "=== Downloading ttyd binaries ==="
+        echo "=== Downloading ttyd binaries (shared-tty fork) ==="
         
-        TTYD_VERSION="1.7.7"
-        echo "Downloading ttyd version: $TTYD_VERSION"
+        REPO="eastlondoner/ttyd"
+        VERSION="1.8.0"
         
-        echo "Downloading ttyd-x64..."
-        TTYD_URL_X64="https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64"
+        echo "Getting ttyd version $VERSION from $REPO..."
+        
+        # Download SHA256SUMS for verification
+        echo "Downloading SHA256SUMS..."
+        SUMS_URL="https://github.com/$REPO/releases/download/$VERSION/SHA256SUMS"
+        if curl -fsSL -o SHA256SUMS "$SUMS_URL"; then
+            echo "✓ Downloaded SHA256SUMS"
+        else
+            echo "✗ Failed to download SHA256SUMS!"
+            return 1
+        fi
+        
+        # Download ttyd-x64 (x86_64)
+        echo "Downloading ttyd.x86_64..."
+        TTYD_URL_X64="https://github.com/$REPO/releases/download/$VERSION/ttyd.x86_64"
         if curl -fsSL -o ttyd-x64 "$TTYD_URL_X64"; then
             echo "✓ Downloaded ttyd-x64"
+            
+            # Verify checksum
+            EXPECTED_CHECKSUM=$(grep "ttyd.x86_64" SHA256SUMS | cut -d' ' -f1)
+            ACTUAL_CHECKSUM=$(sha256sum ttyd-x64 | cut -d' ' -f1)
+            
+            if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
+                echo "✗ Checksum verification failed for ttyd-x64!"
+                echo "  Expected: $EXPECTED_CHECKSUM"
+                echo "  Actual: $ACTUAL_CHECKSUM"
+                rm -f ttyd-x64
+                return 1
+            fi
+            echo "✓ Checksum verified for ttyd-x64"
+            
             chmod +x ttyd-x64
             ls -lh ./ttyd-x64
         else
@@ -166,10 +193,25 @@ download_ttyd() {
             return 1
         fi
         
-        echo "Downloading ttyd-arm64..."
-        TTYD_URL_ARM64="https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.aarch64"
+        # Download ttyd-arm64 (aarch64)
+        echo "Downloading ttyd.aarch64..."
+        TTYD_URL_ARM64="https://github.com/$REPO/releases/download/$VERSION/ttyd.aarch64"
         if curl -fsSL -o ttyd-arm64 "$TTYD_URL_ARM64"; then
             echo "✓ Downloaded ttyd-arm64"
+            
+            # Verify checksum
+            EXPECTED_CHECKSUM=$(grep "ttyd.aarch64" SHA256SUMS | cut -d' ' -f1)
+            ACTUAL_CHECKSUM=$(sha256sum ttyd-arm64 | cut -d' ' -f1)
+            
+            if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
+                echo "✗ Checksum verification failed for ttyd-arm64!"
+                echo "  Expected: $EXPECTED_CHECKSUM"
+                echo "  Actual: $ACTUAL_CHECKSUM"
+                rm -f ttyd-arm64
+                return 1
+            fi
+            echo "✓ Checksum verified for ttyd-arm64"
+            
             chmod +x ttyd-arm64
             ls -lh ./ttyd-arm64
         else
@@ -177,7 +219,10 @@ download_ttyd() {
             return 1
         fi
         
-        echo "✓ ttyd download completed successfully"
+        # Clean up SHA256SUMS file
+        rm -f SHA256SUMS
+        
+        echo "✓ ttyd (shared-tty fork) download completed successfully"
     } &> "$log_file"
     
     if [ $? -ne 0 ]; then
@@ -206,10 +251,54 @@ download_claude() {
         
         echo "Claude Code version: $CLAUDE_VERSION"
         
+        echo "Downloading manifest..."
+        MANIFEST_JSON=$(curl -fsSL "$GCS_BUCKET/$CLAUDE_VERSION/manifest.json")
+        
+        if [ -z "$MANIFEST_JSON" ]; then
+            echo "✗ Failed to download manifest!"
+            return 1
+        fi
+        
+        # Check if jq is available
+        if ! command -v jq &> /dev/null; then
+            echo "✗ jq is required but not installed!"
+            return 1
+        fi
+        
+        # Extract checksums for both platforms
+        CHECKSUM_X64=$(echo "$MANIFEST_JSON" | jq -r '.platforms["linux-x64"].checksum // empty')
+        CHECKSUM_ARM64=$(echo "$MANIFEST_JSON" | jq -r '.platforms["linux-arm64"].checksum // empty')
+        
+        if [ -z "$CHECKSUM_X64" ] || [[ ! "$CHECKSUM_X64" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "✗ Failed to get valid checksum for linux-x64!"
+            return 1
+        fi
+        
+        if [ -z "$CHECKSUM_ARM64" ] || [[ ! "$CHECKSUM_ARM64" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "✗ Failed to get valid checksum for linux-arm64!"
+            return 1
+        fi
+        
+        echo "linux-x64 checksum: $CHECKSUM_X64"
+        echo "linux-arm64 checksum: $CHECKSUM_ARM64"
+        
+        # Download and verify claude-linux-x64
         echo "Downloading claude-linux-x64..."
         CLAUDE_URL_X64="$GCS_BUCKET/$CLAUDE_VERSION/linux-x64/claude"
         if curl -fsSL -o claude-x64 "$CLAUDE_URL_X64"; then
             echo "✓ Downloaded claude-x64"
+            
+            # Verify checksum
+            ACTUAL_CHECKSUM=$(sha256sum claude-x64 | cut -d' ' -f1)
+            if [ "$ACTUAL_CHECKSUM" != "$CHECKSUM_X64" ]; then
+                echo "✗ Checksum verification failed for claude-x64!"
+                echo "  Expected: $CHECKSUM_X64"
+                echo "  Actual: $ACTUAL_CHECKSUM"
+                rm -f claude-x64
+                return 1
+            fi
+            echo "✓ Checksum verified for claude-x64"
+            
             chmod +x claude-x64
             ls -lh ./claude-x64
         else
@@ -217,10 +306,23 @@ download_claude() {
             return 1
         fi
         
+        # Download and verify claude-linux-arm64
         echo "Downloading claude-linux-arm64..."
         CLAUDE_URL_ARM64="$GCS_BUCKET/$CLAUDE_VERSION/linux-arm64/claude"
         if curl -fsSL -o claude-arm64 "$CLAUDE_URL_ARM64"; then
             echo "✓ Downloaded claude-arm64"
+            
+            # Verify checksum
+            ACTUAL_CHECKSUM=$(sha256sum claude-arm64 | cut -d' ' -f1)
+            if [ "$ACTUAL_CHECKSUM" != "$CHECKSUM_ARM64" ]; then
+                echo "✗ Checksum verification failed for claude-arm64!"
+                echo "  Expected: $CHECKSUM_ARM64"
+                echo "  Actual: $ACTUAL_CHECKSUM"
+                rm -f claude-arm64
+                return 1
+            fi
+            echo "✓ Checksum verified for claude-arm64"
+            
             chmod +x claude-arm64
             ls -lh ./claude-arm64
         else

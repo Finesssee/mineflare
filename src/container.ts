@@ -1682,7 +1682,31 @@ export class MinecraftContainer extends Container {
           });
         }
         case "GET": {
-          const obj = await bucketToUse.get(pathWithoutLeadingSlash);
+          // Check for Range header first (before fetching the full object)
+          const rangeHeader = request.headers.get("Range");
+          let rangeStart: number | undefined;
+          let rangeEnd: number | undefined;
+          
+          if (rangeHeader) {
+            // Parse Range header: bytes=start-end
+            const rangeMatch = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+            if (rangeMatch) {
+              rangeStart = parseInt(rangeMatch[1], 10);
+              rangeEnd = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : undefined;
+              console.error(`[fetchFromR2] Range request: bytes=${rangeStart}-${rangeEnd ?? 'EOF'}`);
+            }
+          }
+          
+          // Fetch object with range if specified
+          const obj = rangeStart !== undefined 
+            ? await bucketToUse.get(pathWithoutLeadingSlash, {
+                range: { 
+                  offset: rangeStart, 
+                  length: rangeEnd !== undefined ? (rangeEnd - rangeStart + 1) : undefined 
+                }
+              })
+            : await bucketToUse.get(pathWithoutLeadingSlash);
+            
           if (!obj) {
             // simulate aws s3 error
             return new Response(`<?xml version="1.0" encoding="UTF-8"?>
@@ -1736,7 +1760,6 @@ export class MinecraftContainer extends Container {
           
           const responseHeaders: Record<string, string> = {
             "Content-Type": obj.httpMetadata?.contentType ?? "application/octet-stream",
-            "Content-Length": obj.size.toString(),
             "ETag": objectETag,
             "Last-Modified": obj.uploaded.toUTCString(),
             "Accept-Ranges": "bytes",
@@ -1748,10 +1771,43 @@ export class MinecraftContainer extends Container {
             responseHeaders["x-amz-meta-md5"] = obj.customMetadata.md5;
           }
           
-          return new Response(obj.body as unknown as ReadableStream, {
-            headers: responseHeaders,
-          });
-          
+          // Handle range response
+          if (obj.range) {
+            // Partial content response (206)
+            // R2Range can be { offset?: number, length: number } or { suffix: number }
+            let actualStart: number;
+            let actualEnd: number;
+            let contentLength: number;
+            
+            if ('suffix' in obj.range) {
+              // Suffix range (last N bytes)
+              contentLength = obj.range.suffix;
+              actualStart = obj.size - contentLength;
+              actualEnd = obj.size - 1;
+            } else {
+              // Range with offset/length
+              actualStart = obj.range.offset ?? 0;
+              contentLength = obj.range.length ?? (obj.size - actualStart);
+              actualEnd = actualStart + contentLength - 1;
+            }
+            
+            responseHeaders["Content-Length"] = contentLength.toString();
+            responseHeaders["Content-Range"] = `bytes ${actualStart}-${actualEnd}/${obj.size}`;
+            console.error(`[fetchFromR2] Returning 206 Partial Content: ${actualStart}-${actualEnd}/${obj.size}`);
+            
+            return new Response(obj.body as unknown as ReadableStream, {
+              status: 206,
+              headers: responseHeaders,
+            });
+          } else {
+            // Full content response (200)
+            responseHeaders["Content-Length"] = obj.size.toString();
+            
+            return new Response(obj.body as unknown as ReadableStream, {
+              status: 200,
+              headers: responseHeaders,
+            });
+          }
         }
         case "PUT": {
           // AWS S3 UploadPart: PUT /key?partNumber=N&uploadId=ID
@@ -1761,6 +1817,7 @@ export class MinecraftContainer extends Container {
           if (uploadId && partNumberParam) {
             // Upload a single part of a multipart upload
             const partNumber = parseInt(partNumberParam, 10);
+            console.error(`Uploading part ${partNumber} for uploadId ${uploadId}`);
             
             if (!request.body) {
               return new Response(`<?xml version="1.0" encoding="UTF-8"?>
@@ -2493,6 +2550,7 @@ class HTTPProxyControl {
         const request = await this.readHTTPRequest(channel);
         
         // Make the actual fetch request
+        console.error(`Proxying ${request.method} ${request.url}`);
         const response = await this.fetchImplementation(request);
         
         // Send HTTP response back to the data channel

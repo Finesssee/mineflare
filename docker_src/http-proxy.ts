@@ -280,7 +280,7 @@ class HTTPProxyServer {
       
       // Start reading response immediately (sets up handlers)
       const receivePromise = new Promise<Response>((resolve, reject) => {
-        this.readHTTPResponseFromDataChannel(channel, resolve, reject);
+        this.readHTTPResponseFromDataChannel(channel, req.method, resolve, reject);
       });
       
       // Start sending request (including body streaming)
@@ -541,7 +541,12 @@ class HTTPProxyServer {
     console.log(`[Data] Sent HTTP request to container.ts`);
   }
 
-  private readHTTPResponseFromDataChannel(channel: DataChannelState, resolve: (response: Response) => void, reject: (error: Error) => void) {
+  private readHTTPResponseFromDataChannel(
+    channel: DataChannelState,
+    method: string,
+    resolve: (response: Response) => void,
+    reject: (error: Error) => void
+  ) {
 
       let buffer = new Uint8Array(0);
       let headersParsed = false;
@@ -644,6 +649,13 @@ class HTTPProxyServer {
             // If this status code never has a response body (1xx, 204, 304),
             // finalize immediately without waiting for a connection close
             if (statusCode === 204 || statusCode === 304 || (statusCode >= 100 && statusCode < 200)) {
+              cleanup();
+              this.finalizeResponse(statusCode, statusText, headers, [], false, resolve);
+              return;
+            }
+
+            // For HEAD requests, there is never a response body. Finalize immediately
+            if (method.toUpperCase() === 'HEAD') {
               cleanup();
               this.finalizeResponse(statusCode, statusText, headers, [], false, resolve);
               return;

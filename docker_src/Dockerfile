@@ -19,15 +19,23 @@ RUN apt-get update \
         curl \
         ca-certificates \
         sudo \
-        tmux \
-        ncurses-term \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && mkdir -p $(dirname "${TAILSCALE_STATE_DIR}") \
     && mkdir -p /data/plugins \
     && echo "minecraft ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/minecraft \
     && chmod 0440 /etc/sudoers.d/minecraft \
-    && echo 'export TERM=xterm-256color' >> /etc/profile \
     && rm -rf /var/lib/apt/lists/*
+
+# Pre-download Paper MC 1.21.7 during build to avoid runtime downloads
+# This significantly reduces container startup time
+# The mc-image-helper uses .skipExisting(true) internally, so runtime startup
+# will detect the pre-downloaded jar and skip re-downloading it
+RUN /usr/bin/mc-image-helper install-paper \
+    --project=paper \
+    --version=1.21.7 \
+    --output-directory=/data \
+    --results-file=/data/.paper.env \
+    && chown -R 1000:1000 /data
 
 # Install Minecraft plugin development dependencies
 COPY --chmod=755 setup-paper-dev.sh /tmp/setup-paper-dev.sh

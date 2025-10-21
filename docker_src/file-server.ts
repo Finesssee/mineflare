@@ -90,8 +90,8 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 
 // Multipart download configuration
-const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024; // 50 MB
-const DOWNLOAD_CHUNK_SIZE = 10 * 1024 * 1024;  // 10 MB per chunk
+const LARGE_FILE_THRESHOLD = 100 * 1024 * 1024; // 100 MB
+const DOWNLOAD_CHUNK_SIZE = 50 * 1024 * 1024;   // 50 MB per chunk
 const MAX_CONCURRENT_DOWNLOADS = 5;            // Download 5 chunks at once
 
 // /**
@@ -145,11 +145,17 @@ async function downloadRangeWithRetry(
   totalParts: number
 ): Promise<ArrayBuffer> {
   let lastError: Error | null = null;
+  const rangeSize = end - start + 1;
+  const rangeSizeKB = (rangeSize / 1024).toFixed(2);
+  
+  console.log(
+    `[FileServer] [Part ${partNumber}/${totalParts}] Starting download of bytes ${start}-${end} (${rangeSizeKB} KB)`
+  );
   
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       console.log(
-        `[FileServer] Downloading part ${partNumber}/${totalParts} (bytes ${start}-${end}): Attempt ${attempt}/${MAX_RETRIES}`
+        `[FileServer] [Part ${partNumber}/${totalParts}] Attempt ${attempt}/${MAX_RETRIES}`
       );
       
       // Construct direct S3 URL for range request
@@ -157,37 +163,70 @@ async function downloadRangeWithRetry(
       const bucket = process.env.DATA_BUCKET_NAME || process.env.DYNMAP_BUCKET;
       const url = `${endpoint}/${bucket}/${key}`;
       
+      console.log(
+        `[FileServer] [Part ${partNumber}/${totalParts}] Fetching from: ${url}`
+      );
+      console.log(
+        `[FileServer] [Part ${partNumber}/${totalParts}] Range header: bytes=${start}-${end}`
+      );
+      
+      const fetchStartTime = Date.now();
       const response = await fetch(url, {
         method: "GET",
         headers: {
           "Range": `bytes=${start}-${end}`,
         },
       });
+      const fetchDuration = Date.now() - fetchStartTime;
+      
+      console.log(
+        `[FileServer] [Part ${partNumber}/${totalParts}] Response received in ${fetchDuration}ms, status: ${response.status}`
+      );
       
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const errorBody = await response.text().catch(() => '(unable to read body)');
+        throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorBody}`);
       }
       
-      const data = await response.arrayBuffer();
       console.log(
-        `[FileServer] Successfully downloaded part ${partNumber}/${totalParts} (${data.byteLength} bytes)`
+        `[FileServer] [Part ${partNumber}/${totalParts}] Reading response body...`
       );
+      const readStartTime = Date.now();
+      const data = await response.arrayBuffer();
+      const readDuration = Date.now() - readStartTime;
+      const totalDuration = Date.now() - fetchStartTime;
+      
+      console.log(
+        `[FileServer] [Part ${partNumber}/${totalParts}] ✓ Downloaded ${data.byteLength} bytes (expected ${rangeSize}) in ${totalDuration}ms (fetch: ${fetchDuration}ms, read: ${readDuration}ms)`
+      );
+      
+      if (data.byteLength !== rangeSize) {
+        console.warn(
+          `[FileServer] [Part ${partNumber}/${totalParts}] WARNING: Size mismatch! Expected ${rangeSize}, got ${data.byteLength}`
+        );
+      }
       
       return data;
     } catch (error: any) {
       lastError = error;
-      console.warn(
-        `[FileServer] Part ${partNumber}/${totalParts} download attempt ${attempt}/${MAX_RETRIES} failed: ${error.message}`
+      console.error(
+        `[FileServer] [Part ${partNumber}/${totalParts}] ✗ Attempt ${attempt}/${MAX_RETRIES} failed: ${error.message}`
       );
+      if (error.code) {
+        console.error(`[FileServer] [Part ${partNumber}/${totalParts}] Error code: ${error.code}`);
+      }
       
       if (attempt < MAX_RETRIES) {
         const delayMs = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
-        console.log(`[FileServer] Retrying part ${partNumber} in ${delayMs}ms...`);
+        console.log(`[FileServer] [Part ${partNumber}/${totalParts}] Retrying in ${delayMs}ms...`);
         await new Promise(resolve => setTimeout(resolve, delayMs));
       }
     }
   }
   
+  console.error(
+    `[FileServer] [Part ${partNumber}/${totalParts}] All ${MAX_RETRIES} attempts exhausted`
+  );
   throw new Error(
     `Failed to download part ${partNumber}/${totalParts} after ${MAX_RETRIES} attempts: ${lastError?.message}`
   );
@@ -202,13 +241,19 @@ async function downloadLargeFile(
   tempFile: string,
   fileSize: number
 ): Promise<void> {
+  const downloadStartTime = Date.now();
   console.log(
     `[FileServer] Starting multipart download: ${key} (${(fileSize / (1024 * 1024)).toFixed(2)} MB)`
   );
   
   // Calculate number of parts
   const numParts = Math.ceil(fileSize / DOWNLOAD_CHUNK_SIZE);
-  console.log(`[FileServer] Splitting download into ${numParts} parts of ~${(DOWNLOAD_CHUNK_SIZE / (1024 * 1024)).toFixed(2)} MB each`);
+  console.log(`[FileServer] Configuration:`);
+  console.log(`[FileServer]   - File size: ${fileSize} bytes (${(fileSize / (1024 * 1024)).toFixed(2)} MB)`);
+  console.log(`[FileServer]   - Chunk size: ${DOWNLOAD_CHUNK_SIZE} bytes (${(DOWNLOAD_CHUNK_SIZE / (1024 * 1024)).toFixed(2)} MB)`);
+  console.log(`[FileServer]   - Total parts: ${numParts}`);
+  console.log(`[FileServer]   - Max concurrent: ${MAX_CONCURRENT_DOWNLOADS}`);
+  console.log(`[FileServer]   - Total batches: ${Math.ceil(numParts / MAX_CONCURRENT_DOWNLOADS)}`);
   
   // Create array of download tasks
   const downloadTasks: Array<{
@@ -228,9 +273,11 @@ async function downloadLargeFile(
       tempFile: `${tempFile}.part${i}`,
     });
   }
+  console.log(`[FileServer] Download tasks created`);
   
   // Download parts concurrently with controlled concurrency
   const downloadPart = async (task: typeof downloadTasks[0]) => {
+    const partStartTime = Date.now();
     const data = await downloadRangeWithRetry(
       s3Client,
       key,
@@ -241,25 +288,55 @@ async function downloadLargeFile(
     );
     
     // Write part to temp file
+    const writeStartTime = Date.now();
     await Bun.write(task.tempFile, data);
-    console.log(`[FileServer] Wrote part ${task.partNumber}/${numParts} to ${task.tempFile}`);
+    const writeDuration = Date.now() - writeStartTime;
+    const totalPartDuration = Date.now() - partStartTime;
+    console.log(
+      `[FileServer] [Part ${task.partNumber}/${numParts}] Written to ${task.tempFile} in ${writeDuration}ms (total: ${totalPartDuration}ms)`
+    );
   };
   
   // Process downloads with controlled concurrency
+  console.log(`[FileServer] ======== BATCH DOWNLOADS START ========`);
+  const batchStartTime = Date.now();
   const results: Promise<void>[] = [];
+  let completedParts = 0;
+  
   for (let i = 0; i < downloadTasks.length; i += MAX_CONCURRENT_DOWNLOADS) {
+    const batchNumber = Math.floor(i / MAX_CONCURRENT_DOWNLOADS) + 1;
+    const totalBatches = Math.ceil(numParts / MAX_CONCURRENT_DOWNLOADS);
     const batch = downloadTasks.slice(i, i + MAX_CONCURRENT_DOWNLOADS);
+    
     console.log(
-      `[FileServer] Starting batch ${Math.floor(i / MAX_CONCURRENT_DOWNLOADS) + 1}/${Math.ceil(numParts / MAX_CONCURRENT_DOWNLOADS)}: parts ${batch[0].partNumber}-${batch[batch.length - 1].partNumber}`
+      `[FileServer] -------- Batch ${batchNumber}/${totalBatches} --------`
+    );
+    console.log(
+      `[FileServer] Downloading parts ${batch[0].partNumber}-${batch[batch.length - 1].partNumber} concurrently...`
     );
     
+    const batchItemStartTime = Date.now();
     const batchPromises = batch.map(task => downloadPart(task));
     await Promise.all(batchPromises);
+    const batchItemDuration = Date.now() - batchItemStartTime;
+    
+    completedParts += batch.length;
+    const progress = ((completedParts / numParts) * 100).toFixed(1);
+    console.log(
+      `[FileServer] Batch ${batchNumber}/${totalBatches} complete in ${(batchItemDuration / 1000).toFixed(2)}s (${progress}% done)`
+    );
+    
     results.push(...batchPromises);
   }
   
-  console.log(`[FileServer] All parts downloaded successfully, reconstituting file...`);
+  const batchDuration = Date.now() - batchStartTime;
+  console.log(`[FileServer] ======== BATCH DOWNLOADS COMPLETE ========`);
+  console.log(`[FileServer] All ${numParts} parts downloaded in ${(batchDuration / 1000).toFixed(2)}s`);
   
+  console.log(`[FileServer] ======== FILE RECONSTITUTION START ========`);
+  console.log(`[FileServer] Reconstituting file from ${numParts} parts...`);
+  
+  const reconStartTime = Date.now();
   // Reconstitute the file from parts
   const targetFile = Bun.file(tempFile).writer();
   
@@ -267,6 +344,10 @@ async function downloadLargeFile(
     const partFile = `${tempFile}.part${i}`;
     const partData = await Bun.file(partFile).arrayBuffer();
     targetFile.write(partData);
+    
+    if ((i + 1) % 10 === 0 || i === numParts - 1) {
+      console.log(`[FileServer] Reconstitution progress: ${i + 1}/${numParts} parts merged`);
+    }
     
     // Clean up part file
     try {
@@ -278,7 +359,14 @@ async function downloadLargeFile(
   
   await targetFile.end();
   
-  console.log(`[FileServer] File reconstituted successfully: ${tempFile}`);
+  const reconDuration = Date.now() - reconStartTime;
+  const totalDuration = Date.now() - downloadStartTime;
+  
+  console.log(`[FileServer] ======== FILE RECONSTITUTION COMPLETE ========`);
+  console.log(`[FileServer] Reconstitution took ${(reconDuration / 1000).toFixed(2)}s`);
+  console.log(`[FileServer] Total multipart download time: ${(totalDuration / 1000).toFixed(2)}s`);
+  console.log(`[FileServer] Average speed: ${((fileSize / (1024 * 1024)) / (totalDuration / 1000)).toFixed(2)} MB/s`);
+  console.log(`[FileServer] File saved to: ${tempFile}`);
 }
 
 /**
@@ -807,7 +895,10 @@ class FileServer {
   private async handleRestore(pathname: string, backupFilename: string): Promise<Response> {
     this.restoreCount++;
     this.activeRestores++;
+    const restoreStartTime = Date.now();
+    console.log(`[FileServer] ============ RESTORE START ============`);
     console.log(`[FileServer] Restore request: ${backupFilename} -> ${pathname}`);
+    console.log(`[FileServer] Active restores: ${this.activeRestores}`);
 
     try {
       // Normalize directory path
@@ -815,12 +906,16 @@ class FileServer {
       if (!directory.startsWith("/")) {
         directory = "/" + directory;
       }
+      console.log(`[FileServer] Normalized directory: ${directory}`);
 
       // Create S3 client
+      console.log(`[FileServer] Creating S3 client for 'data' bucket...`);
       const s3Client = createS3Client('data');
+      console.log(`[FileServer] S3 client created successfully`);
 
       // Validate backup filename (prevent path traversal)
       if (backupFilename.includes("..") || !backupFilename.startsWith("backups/")) {
+        console.error(`[FileServer] Invalid backup filename: ${backupFilename}`);
         return new Response(
           JSON.stringify({ error: "Invalid backup filename" }),
           {
@@ -829,6 +924,7 @@ class FileServer {
           }
         );
       }
+      console.log(`[FileServer] Backup filename validated`);
 
       console.log(`[FileServer] Checking file size for: ${backupFilename}`);
 
@@ -837,9 +933,14 @@ class FileServer {
       const bucket = process.env.DATA_BUCKET_NAME || process.env.DYNMAP_BUCKET;
       const headUrl = `${endpoint}/${bucket}/${backupFilename}`;
       
+      console.log(`[FileServer] Sending HEAD request to: ${headUrl}`);
+      const headStartTime = Date.now();
       const headResponse = await fetch(headUrl, { method: "HEAD" });
+      const headDuration = Date.now() - headStartTime;
+      console.log(`[FileServer] HEAD request completed in ${headDuration}ms, status: ${headResponse.status}`);
       
       if (!headResponse.ok) {
+        console.error(`[FileServer] Backup not found or HEAD request failed: ${backupFilename}`);
         return new Response(
           JSON.stringify({ 
             error: `Backup not found: ${backupFilename}`,
@@ -856,6 +957,8 @@ class FileServer {
       const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(2);
       
       console.log(`[FileServer] Backup file size: ${fileSize} bytes (${fileSizeMB} MB)`);
+      console.log(`[FileServer] Large file threshold: ${LARGE_FILE_THRESHOLD} bytes (${(LARGE_FILE_THRESHOLD / (1024 * 1024)).toFixed(2)} MB)`);
+      console.log(`[FileServer] Will use ${fileSize >= LARGE_FILE_THRESHOLD ? 'MULTIPART' : 'SIMPLE'} download method`);
 
       // Save to temp file
       const timestamp = new Date()
@@ -864,64 +967,110 @@ class FileServer {
         .replace(/\..+/, "")
         .replace("T", "_");
       const tempFile = `/tmp/restore_${timestamp}.tar.gz`;
+      console.log(`[FileServer] Temp file will be: ${tempFile}`);
       
       // Use multipart download for large files, simple download for small files
+      const downloadStartTime = Date.now();
       if (fileSize >= LARGE_FILE_THRESHOLD) {
+        console.log(
+          `[FileServer] ======== MULTIPART DOWNLOAD START ========`
+        );
         console.log(
           `[FileServer] File is large (>= ${(LARGE_FILE_THRESHOLD / (1024 * 1024)).toFixed(0)} MB), using multipart download`
         );
         await downloadLargeFile(s3Client, backupFilename, tempFile, fileSize);
+        const downloadDuration = Date.now() - downloadStartTime;
+        console.log(`[FileServer] ======== MULTIPART DOWNLOAD COMPLETE ========`);
+        console.log(`[FileServer] Download took ${(downloadDuration / 1000).toFixed(2)}s`);
       } else {
+        console.log(`[FileServer] ======== SIMPLE DOWNLOAD START ========`);
         console.log(`[FileServer] File is small, using simple download`);
         const s3File = s3Client.file(backupFilename);
+        console.log(`[FileServer] Fetching file data via s3Client.file().arrayBuffer()...`);
+        const fetchStartTime = Date.now();
         const fileData = await s3File.arrayBuffer();
+        const fetchDuration = Date.now() - fetchStartTime;
+        console.log(`[FileServer] Fetch completed in ${(fetchDuration / 1000).toFixed(2)}s`);
+        console.log(`[FileServer] Writing ${fileData.byteLength} bytes to ${tempFile}...`);
+        const writeStartTime = Date.now();
         await Bun.write(tempFile, fileData);
-        console.log(`[FileServer] Downloaded ${fileData.byteLength} bytes to ${tempFile}`);
+        const writeDuration = Date.now() - writeStartTime;
+        console.log(`[FileServer] Write completed in ${(writeDuration / 1000).toFixed(2)}s`);
+        const downloadDuration = Date.now() - downloadStartTime;
+        console.log(`[FileServer] ======== SIMPLE DOWNLOAD COMPLETE ========`);
+        console.log(`[FileServer] Download took ${(downloadDuration / 1000).toFixed(2)}s total`);
       }
 
       // Get file size from written file
+      console.log(`[FileServer] Verifying downloaded file size...`);
       const restoredFile = Bun.file(tempFile);
       const restoredStat = await restoredFile.stat();
       const downloadedSize = restoredStat?.size || 0;
 
-      console.log(`[FileServer] Downloaded ${downloadedSize} bytes to ${tempFile}`);
+      console.log(`[FileServer] Downloaded file size: ${downloadedSize} bytes (${(downloadedSize / (1024 * 1024)).toFixed(2)} MB)`);
+      console.log(`[FileServer] Expected size: ${fileSize} bytes (${fileSizeMB} MB)`);
+      
+      if (downloadedSize !== fileSize) {
+        console.error(`[FileServer] WARNING: Downloaded size (${downloadedSize}) does not match expected size (${fileSize})`);
+      } else {
+        console.log(`[FileServer] Size verification: OK`);
+      }
 
       // Ensure target directory exists
       const parentDir = directory.substring(0, directory.lastIndexOf("/")) || "/";
+      console.log(`[FileServer] Parent directory: ${parentDir}`);
+      console.log(`[FileServer] Ensuring parent directory exists...`);
       await ensureDirectory(parentDir);
+      console.log(`[FileServer] Parent directory ready`);
 
       // Extract tar.gz archive to the parent directory
       // The tar will create/overwrite the target directory
+      console.log(`[FileServer] ======== EXTRACTION START ========`);
       console.log(`[FileServer] Extracting to: ${parentDir}`);
       
+      const extractStartTime = Date.now();
       const tarProc = spawn([
         "tar",
         "-xzf",
         tempFile,
         "-C",
         parentDir,
-        "--unlink-first",        // Remove each file prior to extracting over it
-        "--overwrite",           // Force overwrite existing files
+        "--overwrite",           // Overwrite existing files without unlinking directories
         "--no-same-permissions", // Don't preserve permissions (avoid utime errors)
         "--no-same-owner",       // Don't preserve ownership
         "--touch",               // Don't extract file modified time (avoids utime errors)
       ]);
-
+      
+      console.log(`[FileServer] Waiting for tar process to complete...`);
       const tarExit = await tarProc.exited;
+      const extractDuration = Date.now() - extractStartTime;
+      
+      console.log(`[FileServer] tar exited with code: ${tarExit} (duration: ${(extractDuration / 1000).toFixed(2)}s)`);
       
       if (tarExit !== 0) {
         const stderr = await new Response(tarProc.stderr).text();
+        console.error(`[FileServer] tar stderr: ${stderr}`);
         throw new Error(`tar extraction failed with exit code ${tarExit}: ${stderr}`);
       }
 
-      console.log(`[FileServer] Extraction completed successfully`);
+      console.log(`[FileServer] ======== EXTRACTION COMPLETE ========`);
+      console.log(`[FileServer] Extraction took ${(extractDuration / 1000).toFixed(2)}s`);
 
       // Clean up temp file
+      console.log(`[FileServer] Cleaning up temp file: ${tempFile}`);
       try {
         await unlink(tempFile);
+        console.log(`[FileServer] Temp file cleaned up successfully`);
       } catch (e) {
         console.warn(`[FileServer] Failed to clean up temp file: ${e}`);
       }
+
+      const totalDuration = Date.now() - restoreStartTime;
+      console.log(`[FileServer] ============ RESTORE COMPLETE ============`);
+      console.log(`[FileServer] Total restore time: ${(totalDuration / 1000).toFixed(2)}s`);
+      console.log(`[FileServer] Downloaded: ${(downloadedSize / (1024 * 1024)).toFixed(2)} MB`);
+      console.log(`[FileServer] From: ${backupFilename}`);
+      console.log(`[FileServer] To: ${directory}`);
 
       const result: RestoreResult = {
         success: true,
@@ -933,13 +1082,19 @@ class FileServer {
 
       return this.jsonResponse(result);
     } catch (error: any) {
+      const errorDuration = Date.now() - restoreStartTime;
       const errorMsg = `Restore failed: ${error.message}`;
-      console.error(`[FileServer] ${errorMsg}`, error);
+      console.error(`[FileServer] ============ RESTORE FAILED ============`);
+      console.error(`[FileServer] ${errorMsg}`);
+      console.error(`[FileServer] Error type: ${error.constructor.name}`);
+      console.error(`[FileServer] Error code: ${error.code}`);
+      console.error(`[FileServer] Time elapsed before failure: ${(errorDuration / 1000).toFixed(2)}s`);
       console.error(error.stack);
 
       return this.jsonResponse({ error: errorMsg }, { status: 500 });
     } finally {
       this.activeRestores--;
+      console.log(`[FileServer] Active restores now: ${this.activeRestores}`);
     }
   }
 

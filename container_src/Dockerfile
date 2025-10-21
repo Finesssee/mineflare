@@ -17,7 +17,7 @@ RUN mkdir -p /data/.local/bin && \
 
 COPY optional_plugins/ /data/optional_plugins/
 
-EXPOSE 8080-8100 8114 25575 7681 7682 7683
+EXPOSE 8080-8100 25575 7681 7682 7683
 
 ENTRYPOINT ["/usr/local/bin/start-with-services.sh"]
 CMD ["/image/scripts/start"]

@@ -45,8 +45,32 @@ let buildServicesHash = "";
 const nowMs = Date.now();
 
 try {
+    const hash = createHash("sha256");
+    
+    // Hash the build script itself
     const scriptContent = readFileSync(BUILD_SERVICES_SCRIPT);
-    buildServicesHash = createHash("sha256").update(scriptContent).digest("hex");
+    hash.update(scriptContent);
+    
+    // Hash the source files that the script compiles
+    const sourceFiles = [
+        "./http-proxy.ts",
+        "./file-server.ts",
+    ];
+    
+    for (const sourceFile of sourceFiles) {
+        try {
+            const sourceContent = readFileSync(sourceFile);
+            hash.update(sourceFile); // Include filename for clarity
+            hash.update(sourceContent);
+        } catch (error) {
+            console.warn(`Could not read ${sourceFile} to compute hash; will run build script.`, error);
+            // If we can't read a source file, force rebuild
+            shouldRunBuildServices = true;
+            break;
+        }
+    }
+    
+    buildServicesHash = hash.digest("hex");
 } catch (error) {
     console.warn("Could not read build-container-services.sh to compute hash; will run it.", error);
 }
@@ -122,9 +146,19 @@ if (!imageExists) {
     // When skipping push, just validate the build without exporting
     const outputFlag = skipPush ? "--output type=cacheonly" : "--push";
     
-    // Try to use cache from registry (may not exist on first build, that's ok)
-    // Skip --cache-to as it can significantly slow down pushes when layers are cached
-    await $`docker buildx build --platform ${PLATFORMS} --cache-from type=registry,ref=${tag} --progress=plain ${outputFlag} -t ${tag} .`
+    // Check if we can use the cache by verifying if the image exists remotely
+    // This prevents build failures when the cache image doesn't exist
+    let cacheFromFlag = "";
+    try {
+        await $`docker manifest inspect ${tag}`.quiet();
+        cacheFromFlag = `--cache-from type=registry,ref=${tag}`;
+        console.log(`✓ Found cache image ${tag}, will use for build optimization`);
+    } catch (cacheError) {
+        console.log(`Cache image ${tag} not found, building without cache`);
+    }
+    
+    // Build the image with or without cache based on availability
+    await $`docker buildx build --platform ${PLATFORMS} ${cacheFromFlag} --progress=plain ${outputFlag} -t ${tag} .`
         .catch((error) => {
             console.error(error)
             console.error("Failed to build multi-arch image")

@@ -211,6 +211,26 @@
             animation: pulse 1.5s ease-in-out infinite;
         }
 
+        .tab-status {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-left: 8px;
+            background: rgba(224, 224, 224, 0.3);
+            vertical-align: middle;
+        }
+
+        .tab.connected .tab-status {
+            background: #57A64E;
+            box-shadow: 0 0 8px rgba(87, 166, 78, 0.6);
+        }
+
+        .tab.connecting .tab-status {
+            background: #FFB600;
+            animation: pulse 1s ease-in-out infinite;
+        }
+
         /* API Key Modal */
         #modal-overlay {
             position: fixed;
@@ -394,14 +414,17 @@
             <div class="tab active" data-terminal="claude">
                 <span class="tab-icon">🤖</span>
                 <span class="tab-label">Claude</span>
+                <span class="tab-status"></span>
             </div>
             <div class="tab" data-terminal="codex">
                 <span class="tab-icon">⚡</span>
                 <span class="tab-label">Codex</span>
+                <span class="tab-status"></span>
             </div>
             <div class="tab" data-terminal="gemini">
                 <span class="tab-icon">✨</span>
                 <span class="tab-label">Gemini</span>
+                <span class="tab-status"></span>
             </div>
         </div>
     </div>
