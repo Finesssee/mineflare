@@ -7,7 +7,7 @@ ENV SERVER_PORT=8081
 ENV TYPE=PAPER
 # Get the dynmap jar from https://www.spigotmc.org/resources/dynmap®.274/updates
 # Match the VERSION here (for minecraft version) to the compatible version of Dynmap you downloaded
-ENV VERSION=1.21.7
+ENV VERSION=1.21.8
 ENV PATH="/data/.local/bin:${PATH}"
 
 # HTTP Proxy configuration - directs all HTTP/HTTPS traffic through the proxy
@@ -26,13 +26,13 @@ RUN apt-get update \
     && chmod 0440 /etc/sudoers.d/minecraft \
     && rm -rf /var/lib/apt/lists/*
 
-# Pre-download Paper MC 1.21.7 during build to avoid runtime downloads
+# Pre-download Paper MC 1.21.8 during build to avoid runtime downloads
 # This significantly reduces container startup time
 # The mc-image-helper uses .skipExisting(true) internally, so runtime startup
 # will detect the pre-downloaded jar and skip re-downloading it
 RUN /usr/bin/mc-image-helper install-paper \
     --project=paper \
-    --version=1.21.7 \
+    --version=1.21.8 \
     --output-directory=/data \
     --results-file=/data/.paper.env \
     && chown -R 1000:1000 /data

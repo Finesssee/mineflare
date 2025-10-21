@@ -1064,7 +1064,7 @@ export class MinecraftContainer extends Container {
         };
         
         // Check if this is a Paper server format
-        // Format: "§fThis server is running Paper version 1.21.7-32-main@e792779 (2025-07-16T20:10:15Z) (Implementing API version 1.21.7-R0.1-SNAPSHOT)§r"
+        // Format: "§fThis server is running Paper version 1.21.8-32-main@e792779 (2025-07-16T20:10:15Z) (Implementing API version 1.21.8-R0.1-SNAPSHOT)§r"
         const paperMatch = versionResponse.match(/Paper version ([\d\.]+-\d+-[^@]+@[^\s]+)\s*\(([^)]+)\)\s*\(Implementing API version ([^)]+)\)/);
         
         if (paperMatch) {
@@ -1077,7 +1077,7 @@ export class MinecraftContainer extends Container {
           info.buildTime = buildTime;
           info.data = apiVersion;
           
-          // Extract base version number (e.g., "1.21.7" from "1.21.7-32-main@e792779")
+          // Extract base version number (e.g., "1.21.8" from "1.21.8-32-main@e792779")
           const baseVersionMatch = version.match(/^([\d\.]+)/);
           if (baseVersionMatch) {
             info.versionId = baseVersionMatch[1];

@@ -10,7 +10,7 @@ The /data directory is automatically backed up to Cloudflare R2 when the contain
 
 If you kill the minecraft process, or it crashes, the process will be automatically restarted (the container will continue running, it will not stop). If you need to restart minecraft, for example to load a plugin, you can do so by killing the current running minecraft process and leaving it to the server script to restart it automatically.
 
-By default the server is running PaperMC Minecraft 1.21.7 although it is possible the user has changed this. Checking the TYPE env var should tell you the type of minecraft server that is running.
+By default the server is running PaperMC Minecraft 1.21.8 although it is possible the user has changed this. Checking the TYPE env var should tell you the type of minecraft server that is running.
 
 The following software is installed on this machine:
 

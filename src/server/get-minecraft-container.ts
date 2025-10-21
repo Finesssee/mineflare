@@ -37,9 +37,18 @@ function exhaustiveCheck(value: never): never {
     // afr	Africa 2
     // me	Middle East 2
 
-    // declare type ContinentCode = "AF" | "AN" | "AS" | "EU" | "NA" | "OC" | "SA";
+    // declare type ContinentCode = "AF" | "AN" | "AS" | "EU" | "NA" | "OC" | "SA"
+    
+/**
+ * Get the location hint for the Minecraft container based on contient and longitude 
+ * properties of the incoming request request.cf object.
+ * @param request The request object
+ * @returns The location hint
+ * @see https://developers.cloudflare.com/workers/runtime-apis/request/#requestcf for info on the request.cf object
+ */
 function getLocationHint(request: Request): DurableObjectLocationHint {
-      /**
+    
+   /**
    * Longitude of the incoming request
    *
    * @example "-97.74260"
