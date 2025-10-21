@@ -29,9 +29,9 @@ const elysiaApp = (
     })
   )
   .get("/", () => 'foo')
-  .get("/logs", async () => {
+  .get("/logs", async ({ request }) => {
     console.log("Getting container");
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       // This is the only endpoint that starts the container! But also it cannot be used if the container is shutting down.
       const state = await container.getStatus();
       if(state !== "running") {
@@ -45,10 +45,10 @@ const elysiaApp = (
   /**
    * Get the status of the Minecraft server. This always wakes the server and is the preferred way to wake the server. This may take up to 5 mins to return a value if the server is not already awake.
    */
-  .get("/status", async () => {
+  .get("/status", async ({ request }) => {
     try {
       console.log("Getting container");
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       // This is the only endpoint that starts the container! But also it cannot be used if the container is shutting down.
       const state = await container.getStatus();
       if(state === "stopping") {
@@ -71,9 +71,9 @@ const elysiaApp = (
   /**
    * Get the players of the Minecraft server. This may wake the server if not already awake.
    */
-  .get("/players", async () => {
+  .get("/players", async ({ request}) => {
     try {
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       const response = await container.fetch(new Request("http://localhost/rcon/players"));
       const data = await response.json();
       return data;
@@ -106,9 +106,9 @@ const elysiaApp = (
   /**
    * Get the info of the Minecraftserver. This may wake the server if not already awake.
    */
-  .get("/info", async () => {
+  .get("/info", async ({ request }) => {
     try {
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       const response = await container.fetch(new Request("http://localhost/rcon/info"));
       const info = await response.json();
       return info;
@@ -127,8 +127,8 @@ const elysiaApp = (
   /**
    * Get the state of the container ("running" | "stopping" | "stopped" | "healthy" | "stopped_with_code"). This does not wake the container.
    */
-  .get("/getState", async () => {
-    const container = getMinecraftContainer();
+  .get("/getState", async ({ request }) => {
+    const container = getMinecraftContainer(request);
     // lastChange: number
     // status: "running" | "stopping" | "stopped" | "healthy" | "stopped_with_code"
     const { lastChange } = await container.getState();
@@ -139,9 +139,9 @@ const elysiaApp = (
   /**
    * Get the plugin state. Works when container is stopped.
    */
-  .get("/plugins", async () => {
+  .get("/plugins", async ({ request }) => {
     try{
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       const plugins = await container.getPluginState();
       return { plugins };
     } catch (error) {
@@ -154,9 +154,9 @@ const elysiaApp = (
    * Enable/disable a plugin or set its environment variables.
    * Accepts: { enabled: boolean } | { env: Record<string,string> } | { enabled: boolean, env: Record<string,string> }
    */
-  .post("/plugins/:filename", async ({ params, body }: any) => {
+  .post("/plugins/:filename", async ({ params, body, request }: any) => {
     try {
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       const { filename } = params;
       const { enabled, env } = body as { enabled?: boolean; env?: Record<string, string> };
       
@@ -190,20 +190,20 @@ const elysiaApp = (
   /**
    * Execute an RCON command on the Minecraft server
    */
-  .post("/rcon/execute", async ({ body }: any) => {
+  .post("/rcon/execute", async ({ body, request }: any) => {
     try {
       const { command } = body as { command: string };
-      
+
       if (!command || typeof command !== 'string') {
-        return { 
-          success: false, 
+        return {
+          success: false,
           output: '',
           command: '',
-          error: "Command parameter is required and must be a string" 
+          error: "Command parameter is required and must be a string"
         };
       }
-      
-      const container = getMinecraftContainer();
+
+      const container = getMinecraftContainer(request);
       const result = await container.executeRconCommand(command);
       return result;
     } catch (error) {
@@ -217,9 +217,9 @@ const elysiaApp = (
     }
   })
   
-  .post("/shutdown", async () => {
+  .post("/shutdown", async ({ request }) => {
     try {
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       console.error("Shutting down container");
       await container.stop();
       console.error("Container shut down");
@@ -239,9 +239,9 @@ const elysiaApp = (
   /**
    * Get current session info (running or not)
    */
-  .get("/session/current", async () => {
+  .get("/session/current", async ({ request }) => {
     try {
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       const session = await container.getCurrentSession();
       return session;
     } catch (error) {
@@ -253,9 +253,9 @@ const elysiaApp = (
   /**
    * Get last completed session info
    */
-  .get("/session/last", async () => {
+  .get("/session/last", async ({ request }) => {
     try {
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       const session = await container.getLastSession();
       return session || { error: "No previous sessions" };
     } catch (error) {
@@ -267,9 +267,9 @@ const elysiaApp = (
   /**
    * Get usage statistics (hours this month and year)
    */
-  .get("/session/stats", async () => {
+  .get("/session/stats", async ({ request }) => {
     try {
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       const stats = await container.getUsageStats();
       return stats;
     } catch (error) {
@@ -277,9 +277,9 @@ const elysiaApp = (
       return { thisMonth: 0, thisYear: 0, error: "Failed to get usage stats" };
     }
   })
-  .get("/startup-status", async () => {
+  .get("/startup-status", async ({ request }) => {
     try {
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       const response = await container.fetch(new Request("http://localhost/startup-status"));
       const data = await response.json();
       return data;
@@ -423,7 +423,7 @@ export default {
 
     // Token is valid, route to appropriate WebSocket endpoint
     try {
-      const container = getMinecraftContainer();
+      const container = getMinecraftContainer(request);
       
       if (pathname === '/src/terminal/ws') {
         console.error("Forwarding WebSocket to ttyd");
