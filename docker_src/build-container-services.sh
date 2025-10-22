@@ -461,6 +461,75 @@ build_gemini() {
     return 0
 }
 
+# Function to download Chrome binaries
+download_chrome() {
+    local log_file="$LOG_DIR/chrome.log"
+    {
+        echo "=== Downloading Chromium bundles ==="
+        
+        # Use Playwright's Chromium builds which include all necessary libraries
+        
+        # Chromium for Linux x64
+        echo "Downloading Chromium for linux-x64 (Playwright build)..."
+        CHROMIUM_URL_X64="https://playwright.azureedge.net/builds/chromium/1148/chromium-linux.zip"
+        if curl -fsSL -o chromium-x64.zip "$CHROMIUM_URL_X64"; then
+            echo "✓ Downloaded chromium-x64.zip"
+            
+            # Extract the entire bundle
+            unzip -q chromium-x64.zip
+            if [ -d "./chrome-linux" ]; then
+                # Create tarball of the entire bundle
+                tar -czf chrome-x64.tar.gz -C chrome-linux .
+                chmod +x chrome-x64.tar.gz
+                # Clean up
+                rm -rf chromium-x64.zip chrome-linux
+                ls -lh ./chrome-x64.tar.gz
+            else
+                echo "✗ Failed to extract Chromium bundle for x64!"
+                rm -rf chromium-x64.zip chrome-linux
+                return 1
+            fi
+        else
+            echo "✗ Failed to download Chromium for x64!"
+            return 1
+        fi
+        
+        # Chromium for Linux ARM64
+        echo "Downloading Chromium for linux-arm64 (Playwright build)..."
+        CHROMIUM_URL_ARM64="https://playwright.azureedge.net/builds/chromium/1148/chromium-linux-arm64.zip"
+        if curl -fsSL -o chromium-arm64.zip "$CHROMIUM_URL_ARM64"; then
+            echo "✓ Downloaded chromium-arm64.zip"
+            
+            # Extract the entire bundle
+            unzip -q chromium-arm64.zip
+            if [ -d "./chrome-linux" ]; then
+                # Create tarball of the entire bundle
+                tar -czf chrome-arm64.tar.gz -C chrome-linux .
+                chmod +x chrome-arm64.tar.gz
+                # Clean up
+                rm -rf chromium-arm64.zip chrome-linux
+                ls -lh ./chrome-arm64.tar.gz
+            else
+                echo "✗ Failed to extract Chromium bundle for arm64!"
+                rm -rf chromium-arm64.zip chrome-linux
+                return 1
+            fi
+        else
+            echo "✗ Failed to download Chromium for arm64!"
+            return 1
+        fi
+        
+        echo "✓ Chromium download completed successfully"
+    } &> "$log_file"
+    
+    if [ $? -ne 0 ]; then
+        cat "$log_file"
+        return 1
+    fi
+    cat "$log_file"
+    return 0
+}
+
 echo ""
 echo "Starting parallel builds and downloads..."
 echo ""
@@ -487,9 +556,12 @@ PID_CODEX=$!
 build_gemini &
 PID_GEMINI=$!
 
+download_chrome &
+PID_CHROME=$!
+
 # Wait for all tasks and collect exit codes (bash 3.2 compatible)
-PIDS=($PID_HTTP_PROXY $PID_FILE_SERVER $PID_HTEETP $PID_TTYD $PID_CLAUDE $PID_CODEX $PID_GEMINI)
-TASK_NAMES=("HTTP Proxy build" "File Server build" "hteetp download" "ttyd download" "Claude Code download" "Codex download" "Gemini CLI build")
+PIDS=($PID_HTTP_PROXY $PID_FILE_SERVER $PID_HTEETP $PID_TTYD $PID_CLAUDE $PID_CODEX $PID_GEMINI $PID_CHROME)
+TASK_NAMES=("HTTP Proxy build" "File Server build" "hteetp download" "ttyd download" "Claude Code download" "Codex download" "Gemini CLI build" "Chrome download")
 TASK_STATUS=()
 
 # Wait for each task and collect status
@@ -516,6 +588,7 @@ if [ ${#FAILED_TASKS[@]} -eq 0 ]; then
     echo "  - claude-x64, claude-arm64"
     echo "  - codex-x64, codex-arm64"
     echo "  - gemini-x64, gemini-arm64"
+    echo "  - chrome-x64, chrome-arm64"
     exit 0
 else
     echo "✗ The following tasks failed:"

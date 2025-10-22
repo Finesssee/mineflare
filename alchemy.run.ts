@@ -162,7 +162,7 @@ const bindings =  {
 export const worker: BunSPA<typeof bindings> = await BunSPA("mineflare-main-worker", {
   name: app.name,
   entrypoint: "src/worker.ts",
-  frontend: ["index.html", "src/terminal/index.html"],
+  frontend: ["index.html", "src/terminal/index.html", "src/browser/index.html"],
   adopt: true,
   compatibility: "node",
   compatibilityFlags: ["enable_ctx_exports"],

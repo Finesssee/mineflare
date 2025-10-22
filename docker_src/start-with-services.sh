@@ -1,6 +1,35 @@
 #!/bin/bash
 set -euo pipefail
 
+# ============================================================================
+# Mineflare Container Service Manager
+# ============================================================================
+# This script manages all services running in the Mineflare container.
+#
+# PORT ALLOCATION:
+# === Minecraft Server ===
+# 8080  - Health checks
+# 8081  - Minecraft game traffic
+# 25575 - RCON console
+#
+# === Internal Services ===
+# 8082  - Log tail (hteetp HTTP server)
+# 8083  - File server + backup API
+# 8084  - HTTP proxy control channel
+# 8085-8109 - HTTP proxy data channels (25 channels for R2)
+#
+# === AI Terminals (ttyd) ===
+# 7681  - Claude terminal
+# 7682  - Codex terminal
+# 7683  - Gemini terminal
+# 7684  - Bash terminal
+#
+# === Embedded Browser (noVNC/Chrome) ===
+# 5900  - x11vnc (VNC server)
+# 6080  - websockify (VNC-to-WebSocket proxy)
+# 6090  - Browser control API (xdotool navigation)
+# ============================================================================
+
 # Source SDKMAN if available (for Gradle and other dev tools)
 export SDKMAN_DIR="/usr/local/sdkman"
 if [[ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ]]; then
@@ -120,7 +149,7 @@ start_tailscale() {
   AUTHKEY="${TS_AUTHKEY:-${TAILSCALE_AUTHKEY:-}}"
   
   # Skip Tailscale if no authkey is provided
-  if [ -z "${AUTHKEY}"]; then
+  if [ -z "${AUTHKEY}" ]; then
     echo "Skipping Tailscale (no TS_AUTHKEY found)"
     return
   fi
@@ -196,8 +225,13 @@ configure_dynmap() {
 
 
 start_http_proxy() {
+  # PORTS: 8084 (control), 8085-8109 (data channels - 25 channels)
+  # Provides S3-compatible HTTP interface to R2 buckets
   echo "Starting HTTP proxy server..."
   local PROXY_BINARY="/usr/local/bin/http-proxy"
+  local CONTROL_PORT=8084
+  local DATA_PORT_START=8085
+  local DATA_PORT_END=8109
   
   if [ ! -x "$PROXY_BINARY" ]; then
     echo "Warning: HTTP proxy binary not found or not executable, skipping..."
@@ -205,11 +239,12 @@ start_http_proxy() {
   fi
   
   echo "Using proxy binary: $PROXY_BINARY"
+  echo "HTTP proxy will use control port $CONTROL_PORT and data ports $DATA_PORT_START-$DATA_PORT_END"
   
   # Run the HTTP proxy server in background
   (
     while true; do
-      echo "Starting HTTP proxy (attempt at $(date))"
+      echo "Starting HTTP proxy on ports $CONTROL_PORT, $DATA_PORT_START-$DATA_PORT_END (attempt at $(date))"
       "$PROXY_BINARY" || echo "HTTP proxy crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
@@ -240,7 +275,7 @@ setup_codex() {
     echo "Error: codex binary not found or not executable!"
     return 1
   fi
-
+  
   echo "codex binary is ready at $CODEX_BINARY"
   return 0
 }
@@ -259,7 +294,9 @@ setup_gemini() {
 }
 
 start_file_server() {
-  echo "Starting file server on port 8083..."
+  # PORT: 8083 (File server + backup/restore API)
+  local FILE_SERVER_PORT=8083
+  echo "Starting file server on port $FILE_SERVER_PORT..."
   local FILE_SERVER_BINARY="/usr/local/bin/file-server"
 
   if [ ! -x "$FILE_SERVER_BINARY" ]; then
@@ -268,26 +305,28 @@ start_file_server() {
   fi
 
   echo "Using file server binary: $FILE_SERVER_BINARY"
+  echo "File server will listen on port $FILE_SERVER_PORT"
 
   # Run the file server in background with auto-restart
   (
     while true; do
-      echo "Starting file server (attempt at $(date))"
+      echo "Starting file server on port $FILE_SERVER_PORT (attempt at $(date))"
       "$FILE_SERVER_BINARY" || echo "File server crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/file-server.log 2>&1 &
   FILE_SERVER_PID=$!
 
-  echo "File server started in background (PID: $FILE_SERVER_PID), logging to /logs/file-server.log"
+  echo "File server started in background (PID: $FILE_SERVER_PID) on port $FILE_SERVER_PORT, logging to /logs/file-server.log"
 }
 
 start_xvfb() {
+  # PORT: N/A (Display :99, not a network port)
   echo "Starting Xvfb (virtual display)..."
   
   (
     while true; do
-      echo "Starting Xvfb (attempt at $(date))"
+      echo "Starting Xvfb on display :99 (attempt at $(date))"
       /usr/bin/Xvfb :99 -screen 0 1280x720x24 || echo "Xvfb crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
@@ -306,40 +345,28 @@ start_xvfb() {
   done
 }
 
-start_fluxbox() {
-  echo "Starting Fluxbox (window manager)..."
-  
-  (
-    while true; do
-      echo "Starting Fluxbox (attempt at $(date))"
-      DISPLAY=:99 /usr/bin/fluxbox || echo "Fluxbox crashed (exit code: $?), restarting in 2 seconds..."
-      sleep 2
-    done
-  ) >> /logs/fluxbox.log 2>&1 &
-  FLUXBOX_PID=$!
-  
-  echo "Fluxbox started in background (PID: $FLUXBOX_PID), logging to /logs/fluxbox.log"
-  sleep 1  # Give fluxbox a moment to initialize
-}
+# Removed Fluxbox - running Chrome in kiosk mode without window manager for cleaner display
 
 start_x11vnc() {
-  echo "Starting x11vnc (VNC server)..."
+  # PORT: 5900 (VNC server)
+  local VNC_PORT=5900
+  echo "Starting x11vnc (VNC server) on port $VNC_PORT..."
   
   (
     while true; do
-      echo "Starting x11vnc (attempt at $(date))"
-      DISPLAY=:99 /usr/bin/x11vnc -forever -shared -rfbport 5900 -nopw || echo "x11vnc crashed (exit code: $?), restarting in 2 seconds..."
+      echo "Starting x11vnc on port $VNC_PORT (attempt at $(date))"
+      DISPLAY=:99 /usr/bin/x11vnc -forever -shared -rfbport "$VNC_PORT" -nopw || echo "x11vnc crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/x11vnc.log 2>&1 &
   X11VNC_PID=$!
   
-  echo "x11vnc started in background (PID: $X11VNC_PID), logging to /logs/x11vnc.log"
+  echo "x11vnc started in background (PID: $X11VNC_PID) on port $VNC_PORT, logging to /logs/x11vnc.log"
   
   # Wait for x11vnc to be ready
   for i in $(seq 1 20); do
-    if netstat -ln | grep -q ":5900 "; then
-      echo "x11vnc is ready"
+    if netstat -ln | grep -q ":$VNC_PORT "; then
+      echo "x11vnc is ready on port $VNC_PORT"
       break
     fi
     sleep 0.5
@@ -347,24 +374,47 @@ start_x11vnc() {
 }
 
 start_novnc() {
-  echo "Starting noVNC (web-based VNC client)..."
+  # PORT: 6080 (WebSocket proxy to VNC)
+  local WEBSOCKET_PORT=6080
+  local VNC_TARGET_PORT=5900
+  echo "Starting websockify (VNC-to-WebSocket proxy) on port $WEBSOCKET_PORT..."
   
   (
     while true; do
-      echo "Starting noVNC (attempt at $(date))"
-      /usr/bin/python3 /opt/websockify/run --web /opt/novnc 6080 localhost:5900 || echo "noVNC crashed (exit code: $?), restarting in 2 seconds..."
+      echo "Starting websockify on port $WEBSOCKET_PORT -> localhost:$VNC_TARGET_PORT (attempt at $(date))"
+      # Start websockify to proxy VNC (localhost:5900) to WebSocket (port 6080)
+      # WebSocket connections will come through the worker at /src/browser/ws
+      bash /opt/websockify/run "$WEBSOCKET_PORT" "localhost:$VNC_TARGET_PORT" || echo "websockify crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
-  ) >> /logs/novnc.log 2>&1 &
+  ) >> /logs/websockify.log 2>&1 &
   NOVNC_PID=$!
   
-  echo "noVNC started in background (PID: $NOVNC_PID), logging to /logs/novnc.log"
-  echo "noVNC will be accessible at http://localhost:6080/vnc.html"
+  echo "websockify started in background (PID: $NOVNC_PID) on port $WEBSOCKET_PORT, logging to /logs/websockify.log"
+  echo "Browser WebSocket proxy: localhost:$WEBSOCKET_PORT -> localhost:$VNC_TARGET_PORT"
+}
+
+start_browser_control() {
+  # PORT: 6090 (Browser control HTTP API - xdotool navigation)
+  local BROWSER_CONTROL_PORT=6090
+  echo "Starting browser control server on port $BROWSER_CONTROL_PORT..."
+  
+  (
+    while true; do
+      echo "Starting browser control server on port $BROWSER_CONTROL_PORT (attempt at $(date))"
+      /usr/bin/python3 /usr/local/bin/browser-control.py || echo "Browser control crashed (exit code: $?), restarting in 2 seconds..."
+      sleep 2
+    done
+  ) >> /logs/browser-control.log 2>&1 &
+  BROWSER_CONTROL_PID=$!
+  
+  echo "Browser control server started in background (PID: $BROWSER_CONTROL_PID) on port $BROWSER_CONTROL_PORT, logging to /logs/browser-control.log"
+  echo "Browser navigation API: POST localhost:$BROWSER_CONTROL_PORT/navigate"
 }
 
 start_chrome() {
-  echo "Starting Chrome browser in virtual display..."
-  local CHROME_BINARY="/usr/local/bin/chrome"
+  echo "Starting Chrome browser in kiosk mode (fullscreen, no decorations)..."
+  local CHROME_BINARY="/opt/chrome/chrome"
   
   if [ ! -x "$CHROME_BINARY" ]; then
     echo "Warning: Chrome binary not found or not executable, skipping..."
@@ -377,30 +427,42 @@ start_chrome() {
   mkdir -p /tmp/chrome-profile
   sudo chown -R 1000:1000 /tmp/chrome-profile
   
+  # Set LD_LIBRARY_PATH to include Chrome's bundled libraries
+  export LD_LIBRARY_PATH="/opt/chrome:${LD_LIBRARY_PATH:-}"
+  
   (
     while true; do
-      echo "Starting Chrome (attempt at $(date))"
-      DISPLAY=:99 "$CHROME_BINARY" \
+      echo "Starting Chrome in kiosk mode (attempt at $(date))"
+      DISPLAY=:99 LD_LIBRARY_PATH="/opt/chrome:${LD_LIBRARY_PATH:-}" "$CHROME_BINARY" \
+        --kiosk \
         --no-sandbox \
         --disable-dev-shm-usage \
         --disable-gpu \
+        --disable-infobars \
+        --disable-session-crashed-bubble \
         --user-data-dir=/tmp/chrome-profile \
-        --new-window \
+        --window-size=1280,720 \
+        --window-position=0,0 \
         about:blank || echo "Chrome crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/chrome.log 2>&1 &
   CHROME_PID=$!
-  
+
   echo "Chrome started in background (PID: $CHROME_PID), logging to /logs/chrome.log"
 }
 
 start_ttyd() {
-  echo "Starting web terminals (ttyd) for Claude, Codex, and Gemini..."
+  # PORTS: 7681 (Claude), 7682 (Codex), 7683 (Gemini), 7684 (Bash)
+  echo "Starting web terminals (ttyd) for Claude, Codex, Gemini, and Bash..."
   local TTYD_BINARY="/usr/local/bin/ttyd"
+  local CLAUDE_PORT=7681
+  local CODEX_PORT=7682
+  local GEMINI_PORT=7683
+  local BASH_PORT=7684
 
-  if [ ! -z "$TTYD_BINARY" ]; then
-    echo "Warning: No compatible ttyd binary found, skipping..."
+  if [ ! -x "$TTYD_BINARY" ]; then
+    echo "Warning: No compatible ttyd binary found or not executable, skipping..."
     return
   fi
 
@@ -412,9 +474,9 @@ start_ttyd() {
   # Run ttyd for Claude (port 7681) with shared PTY mode
   (
     while true; do
-      echo "Starting ttyd for Claude with shared PTY mode (attempt at $(date))"
+      echo "Starting ttyd for Claude on port $CLAUDE_PORT with shared PTY mode (attempt at $(date))"
       "$TTYD_BINARY" \
-        --port 7681 \
+        --port "$CLAUDE_PORT" \
         --interface 0.0.0.0 \
         --base-path /src/terminal/claude \
         -Q \
@@ -433,9 +495,9 @@ start_ttyd() {
   # Run ttyd for Codex (port 7682) with shared PTY mode
   (
     while true; do
-      echo "Starting ttyd for Codex with shared PTY mode (attempt at $(date))"
+      echo "Starting ttyd for Codex on port $CODEX_PORT with shared PTY mode (attempt at $(date))"
       "$TTYD_BINARY" \
-        --port 7682 \
+        --port "$CODEX_PORT" \
         --interface 0.0.0.0 \
         --base-path /src/terminal/codex \
         -Q \
@@ -449,14 +511,14 @@ start_ttyd() {
     done
   ) >> /logs/ttyd-codex.log 2>&1 &
   TTYD_CODEX_PID=$!
-  echo "ttyd (Codex) started on port 7682 with shared PTY mode (PID: $TTYD_CODEX_PID)"
+  echo "ttyd (Codex) started on port $CODEX_PORT with shared PTY mode (PID: $TTYD_CODEX_PID)"
 
   # Run ttyd for Gemini (port 7683) with shared PTY mode
   (
     while true; do
-      echo "Starting ttyd for Gemini with shared PTY mode (attempt at $(date))"
+      echo "Starting ttyd for Gemini on port $GEMINI_PORT with shared PTY mode (attempt at $(date))"
       "$TTYD_BINARY" \
-        --port 7683 \
+        --port "$GEMINI_PORT" \
         --interface 0.0.0.0 \
         --base-path /src/terminal/gemini \
         -Q \
@@ -470,14 +532,14 @@ start_ttyd() {
     done
   ) >> /logs/ttyd-gemini.log 2>&1 &
   TTYD_GEMINI_PID=$!
-  echo "ttyd (Gemini) started on port 7683 with shared PTY mode (PID: $TTYD_GEMINI_PID)"
+  echo "ttyd (Gemini) started on port $GEMINI_PORT with shared PTY mode (PID: $TTYD_GEMINI_PID)"
 
   # Run ttyd for Bash (port 7684) with shared PTY mode
   (
     while true; do
-      echo "Starting ttyd for Bash with shared PTY mode (attempt at $(date))"
+      echo "Starting ttyd for Bash on port $BASH_PORT with shared PTY mode (attempt at $(date))"
       "$TTYD_BINARY" \
-        --port 7684 \
+        --port "$BASH_PORT" \
         --interface 0.0.0.0 \
         --base-path /src/terminal/bash \
         -Q \
@@ -491,9 +553,9 @@ start_ttyd() {
     done
   ) >> /logs/ttyd-bash.log 2>&1 &
   TTYD_BASH_PID=$!
-  echo "ttyd (Bash) started on port 7684 with shared PTY mode (PID: $TTYD_BASH_PID)"
+  echo "ttyd (Bash) started on port $BASH_PORT with shared PTY mode (PID: $TTYD_BASH_PID)"
 
-  echo "All ttyd terminals started successfully with shared PTY mode"
+  echo "All ttyd terminals started successfully on ports $CLAUDE_PORT, $CODEX_PORT, $GEMINI_PORT, $BASH_PORT"
 }
 
 backup_on_shutdown() {
@@ -568,8 +630,14 @@ kill_background_processes() {
     kill -KILL "$CHROME_PID" 2>/dev/null || true
   fi
   
+  if [ -n "${BROWSER_CONTROL_PID:-}" ]; then
+    echo "Killing browser control (PID: $BROWSER_CONTROL_PID) and its children..."
+    pkill -KILL -P "$BROWSER_CONTROL_PID" 2>/dev/null || true
+    kill -KILL "$BROWSER_CONTROL_PID" 2>/dev/null || true
+  fi
+  
   if [ -n "${NOVNC_PID:-}" ]; then
-    echo "Killing noVNC (PID: $NOVNC_PID) and its children..."
+    echo "Killing websockify (PID: $NOVNC_PID) and its children..."
     pkill -KILL -P "$NOVNC_PID" 2>/dev/null || true
     kill -KILL "$NOVNC_PID" 2>/dev/null || true
   fi
@@ -578,12 +646,6 @@ kill_background_processes() {
     echo "Killing x11vnc (PID: $X11VNC_PID) and its children..."
     pkill -KILL -P "$X11VNC_PID" 2>/dev/null || true
     kill -KILL "$X11VNC_PID" 2>/dev/null || true
-  fi
-  
-  if [ -n "${FLUXBOX_PID:-}" ]; then
-    echo "Killing Fluxbox (PID: $FLUXBOX_PID) and its children..."
-    pkill -KILL -P "$FLUXBOX_PID" 2>/dev/null || true
-    kill -KILL "$FLUXBOX_PID" 2>/dev/null || true
   fi
   
   if [ -n "${XVFB_PID:-}" ]; then
@@ -809,23 +871,6 @@ write_status "Initializing services"
 
 echo "Starting services..."
 
-
-# Start VNC services for embedded browser
-write_status "Starting virtual display (Xvfb)"
-start_xvfb
-
-write_status "Starting window manager (Fluxbox)"
-start_fluxbox
-
-write_status "Starting VNC server (x11vnc)"
-start_x11vnc
-
-write_status "Starting web VNC client (noVNC)"
-start_novnc
-
-write_status "Starting Chrome browser"
-start_chrome
-
 # Start the file server
 write_status "Starting file server"
 start_file_server
@@ -837,6 +882,21 @@ start_http_proxy
 # Start Tailscale in background if it's enabled
 start_tailscale &
 
+# Start VNC services for embedded browser
+write_status "Starting virtual display (Xvfb)" 
+start_xvfb &
+
+write_status "Starting VNC server (x11vnc)"
+start_x11vnc &
+
+write_status "Starting web VNC client (noVNC)"
+start_novnc &
+
+write_status "Starting Chrome browser in kiosk mode"
+start_chrome &
+
+write_status "Starting browser control server"
+start_browser_control &
 
 # Setup hteetp binary
 write_status "Setting up hteetp"

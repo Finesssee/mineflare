@@ -47,6 +47,7 @@ RUN apt-get update \
         gnupg \
         python3 \
         x11-utils \
+        xdotool \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && mkdir -p $(dirname "${TAILSCALE_STATE_DIR}") \
     && mkdir -p /data/plugins \
@@ -55,12 +56,7 @@ RUN apt-get update \
     && bash /tmp/setup-paper-dev.sh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install noVNC
-RUN wget -qO- https://github.com/novnc/noVNC/archive/refs/tags/v1.4.0.tar.gz | tar xz -C /opt \
-    && mv /opt/noVNC-1.4.0 /opt/novnc \
-    && ln -s /opt/novnc/vnc.html /opt/novnc/index.html
-
-# Install websockify (required by noVNC)
+# Install websockify (required by noVNC for VNC-to-WebSocket proxy)
 RUN wget -qO- https://github.com/novnc/websockify/archive/refs/tags/v0.11.0.tar.gz | tar xz -C /opt \
     && mv /opt/websockify-0.11.0 /opt/websockify
 
@@ -81,6 +77,7 @@ COPY --from=paper-1.21.7 /opt/minecraft/server/1.21.7 /opt/minecraft/server
 RUN ls -la /opt/minecraft/server && chown -R 1000:1000 /opt/minecraft
 
 COPY --chmod=755 start-with-services.sh /usr/local/bin/start-with-services.sh
+COPY --chmod=755 browser-control.py /usr/local/bin/browser-control.py
 COPY dynmap-configuration.txt /dynmap-configuration.txt
 # Copy version-specific plugins to /opt/minecraft/plugins (outside /data)
 COPY Dynmap-3.7-beta-11-spigot-1.21.10.jar /opt/minecraft/plugins/
@@ -97,8 +94,9 @@ COPY --chmod=755 \
     claude-x64 claude-arm64 \
     codex-x64 codex-arm64 \
     gemini-x64 gemini-arm64 \
-    chrome-x64 chrome-arm64 \
     /tmp/
+
+COPY chrome-x64.tar.gz chrome-arm64.tar.gz /tmp/
 
 # Select the correct binaries for the target architecture, move them to /usr/local/bin,
 # and then clean up the temporary files. This is done in a single RUN command to
@@ -118,7 +116,9 @@ RUN set -eux; \
     mv "/tmp/claude-$arch_suffix" /usr/local/bin/claude; \
     mv "/tmp/codex-$arch_suffix" /usr/local/bin/codex; \
     mv "/tmp/gemini-$arch_suffix" /usr/local/bin/gemini; \
-    mv "/tmp/chrome-$arch_suffix" /usr/local/bin/chrome; \
+    mkdir -p /opt/chrome; \
+    tar -xzf "/tmp/chrome-$arch_suffix.tar.gz" -C /opt/chrome; \
+    chmod -R 755 /opt/chrome; \
     rm -rf /tmp/*
 
 COPY CLAUDE.md /data/CLAUDE.md
@@ -129,17 +129,29 @@ RUN mkdir -p /run/tailscale \
     && chown -R 1000:1000 /run/tailscale
 
 # Expose ports:
+# === Minecraft Server ===
 # 8080 - Health checks
-# 8081 - Minecraft game traffic
-# 8082 - Log tail
-# 8083 - File server
-# 8084 - HTTP proxy control
-# 8085-8109 - HTTP proxy data channels
-# 25575 - RCON
-# 7681-7684 - ttyd terminals
-# 5900 - VNC server
-# 6080 - noVNC web client
-EXPOSE 5900 6080
+# 8081 - Minecraft game traffic  
+# 25575 - RCON console
+#
+# === Internal Services ===
+# 8082 - Log tail (hteetp)
+# 8083 - File server + backup API
+# 8084 - HTTP proxy control channel
+# 8085-8109 - HTTP proxy data channels (25 channels for R2 access)
+#
+# === AI Terminals (ttyd) ===
+# 7681 - Claude terminal
+# 7682 - Codex terminal
+# 7683 - Gemini terminal
+# 7684 - Bash terminal
+#
+# === Embedded Browser (noVNC/Chrome) ===
+# 5900 - x11vnc (VNC server)
+# 6080 - websockify (VNC-to-WebSocket proxy)
+# 6090 - Browser control API (xdotool navigation)
+#
+EXPOSE 5900 6080 6090
 
 ENTRYPOINT ["/usr/local/bin/start-with-services.sh"]
 CMD ["/image/scripts/start"]

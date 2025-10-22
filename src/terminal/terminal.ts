@@ -30,7 +30,8 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
  *   - All clients share a single PTY process
  */
 
-type TerminalType = 'claude' | 'codex' | 'gemini';
+type TerminalType = 'claude' | 'codex' | 'gemini' | 'bash' | 'browser';
+type ActualTerminalType = 'claude' | 'codex' | 'gemini' | 'bash';
 
 interface TerminalInstance {
   terminal: Terminal;
@@ -74,11 +75,12 @@ const terminalConfig = {
     allowProposedApi: true
 };
 
-// Create terminal instances
-const terminals: Record<TerminalType, TerminalInstance> = {
+// Create terminal instances (browser is handled separately as an iframe)
+const terminals: Record<ActualTerminalType, TerminalInstance> = {
   claude: createTerminalInstance('claude'),
   codex: createTerminalInstance('codex'),
-  gemini: createTerminalInstance('gemini')
+  gemini: createTerminalInstance('gemini'),
+  bash: createTerminalInstance('bash')
 };
 
 const statusEl = document.getElementById('connection-status')!;
@@ -169,17 +171,28 @@ function updateUrlPanel() {
   }
 
   panel.innerHTML = urls.map(({ url, terminal }) => {
-    const terminalIcon = terminal === 'claude' ? '🤖' : terminal === 'codex' ? '⚡' : '✨';
+    const terminalIcon = terminal === 'claude' ? '🤖' : terminal === 'codex' ? '⚡' : terminal === 'bash' ? '💻' : terminal === 'browser' ? '🌐' : '✨';
     return `
       <div class="detected-url-item">
         <span class="url-terminal-badge">${terminalIcon}</span>
-        <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="detected-url-link">
+        <a href="#" class="detected-url-link" data-url="${escapeHtml(url)}" data-action="open">
           ${escapeHtml(url)}
         </a>
         <button class="url-copy-btn" data-url="${escapeHtml(url)}" title="Copy URL">📋</button>
       </div>
     `;
   }).join('');
+
+  // Add click handlers for opening URLs in browser
+  panel.querySelectorAll('.detected-url-link').forEach(link => {
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const url = (link as HTMLElement).dataset.url;
+      if (url) {
+        await openUrlInBrowser(url);
+      }
+    });
+  });
 
   // Add copy button handlers
   panel.querySelectorAll('.url-copy-btn').forEach(btn => {
@@ -204,6 +217,40 @@ function escapeHtml(str: string): string {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+/**
+ * Open a URL in the embedded browser and switch to browser tab
+ */
+async function openUrlInBrowser(url: string) {
+  try {
+    // Show status
+    showStatus('Opening URL in browser...', 'connecting');
+    
+    // Call the browser navigation API
+    const response = await fetchApi('/api/browser/navigate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to navigate: ${response.statusText}`);
+    }
+    
+    const result = await response.json() as { success: boolean; error?: string };
+    
+    if (result.success) {
+      // Switch to browser tab
+      switchTerminal('browser');
+      showStatus('Browser navigated', 'connected');
+    } else {
+      showStatus(`Navigation failed: ${result.error}`, 'error');
+    }
+  } catch (error) {
+    console.error('Failed to open URL in browser:', error);
+    showStatus('Failed to open URL', 'error');
+  }
 }
 
 /**
@@ -378,7 +425,7 @@ function handleSnapshot(type: TerminalType, instance: TerminalInstance, jsonData
 
 // API Key management
 const API_KEY_STORAGE_KEY = 'mineflare_gemini_api_key';
-let pendingTerminalSwitch: TerminalType | null = null;
+let pendingTerminalSwitch: ActualTerminalType | null = null;
 
 // Update tab visual state based on connection status
 function updateTabConnectionState(type: TerminalType, state: 'connected' | 'connecting' | 'disconnected') {
@@ -394,7 +441,7 @@ function updateTabConnectionState(type: TerminalType, state: 'connected' | 'conn
   }
 }
 
-function createTerminalInstance(type: TerminalType): TerminalInstance {
+function createTerminalInstance(type: ActualTerminalType): TerminalInstance {
   const terminal = new Terminal(terminalConfig);
 
   const webLinksAddon = new WebLinksAddon();
@@ -431,7 +478,7 @@ function showStatus(message: string, type: string) {
     }
 }
 
-async function connect(type: TerminalType) {
+async function connect(type: ActualTerminalType) {
   const instance = terminals[type];
   
   // SINGLETON: If we have an active connection, reuse it
@@ -625,9 +672,9 @@ async function connect(type: TerminalType) {
 }
 
 // Track data handlers to prevent duplicate setup
-const dataHandlersSetup: Set<TerminalType> = new Set();
+const dataHandlersSetup: Set<ActualTerminalType> = new Set();
 
-function setupTerminalDataHandler(type: TerminalType) {
+function setupTerminalDataHandler(type: ActualTerminalType) {
   if (dataHandlersSetup.has(type)) return;
   
   const instance = terminals[type];
@@ -798,6 +845,12 @@ tabs.forEach(tab => {
 });
 
 function switchTerminal(type: TerminalType) {
+  // Browser doesn't need special setup
+  if (type === 'browser') {
+    doSwitchTerminal(type);
+    return;
+  }
+  
   // Check if Gemini requires API key
   if (type === 'gemini' && !getGeminiApiKey()) {
     pendingTerminalSwitch = type;
@@ -810,9 +863,6 @@ function switchTerminal(type: TerminalType) {
 
 function doSwitchTerminal(type: TerminalType) {
   if (type === currentTerminal) return;
-  
-  // Setup data handler for this terminal if not already done
-  setupTerminalDataHandler(type);
   
   // Update active tab
   tabs.forEach(tab => {
@@ -833,6 +883,16 @@ function doSwitchTerminal(type: TerminalType) {
   });
   
   currentTerminal = type;
+
+  // Browser tab doesn't need terminal setup
+  if (type === 'browser') {
+    updateTabConnectionState(type, 'connected');
+    showStatus('Browser ready', 'connected');
+    return;
+  }
+
+  // Setup data handler for this terminal if not already done
+  setupTerminalDataHandler(type);
 
   // Focus the new terminal
   terminals[type].terminal.focus();
@@ -864,6 +924,9 @@ terminals.claude.terminal.focus();
 
 // Start connection to the current (claude) terminal
 connect('claude');
+
+// Mark browser tab as always connected (it's an iframe, not a WebSocket connection managed here)
+updateTabConnectionState('browser', 'connected');
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {

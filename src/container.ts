@@ -105,8 +105,8 @@ export class MinecraftContainer extends Container {
 
     private lastRconSuccess: Date | null = null;
     private _isPasswordSet: boolean = false;
-    // Port the container listens on (default: 8080)
-    defaultPort = 7861;
+    // Port the container listens on (default: 8083 - file server)
+    defaultPort = 8083;
     // Time before container sleeps due to inactivity (default: 30s)
     sleepAfter = "20m";
     
@@ -115,7 +115,7 @@ export class MinecraftContainer extends Container {
         TS_AUTHKEY: "null",
         TS_EXTRA_ARGS: "--advertise-exit-node",
         TS_ENABLE_HEALTH_CHECK: "true",
-        TS_LOCAL_ADDR_PORT: "0.0.0.0:8080",
+        TS_LOCAL_ADDR_PORT: "0.0.0.0:25565",
         
         // Minecraft server configuration
         TYPE: "PAPER",
@@ -583,6 +583,45 @@ export class MinecraftContainer extends Container {
     }
   }
 
+  /**
+   * Navigate the embedded browser to a URL using the browser control service
+   */
+  public async navigateBrowser(url: string): Promise<{ success: boolean; error?: string }> {
+    const status = await this.getStatus();
+    if (status !== 'running') {
+      return { success: false, error: 'Container is not running' };
+    }
+
+    try {
+      console.error('Navigating browser to:', url);
+      
+      // Call the browser control service on port 6090
+      const response = await this.containerFetch(
+        new Request('http://localhost:6090/navigate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        }),
+        6090
+      );
+
+      if (!response.ok) {
+        const error = await response.text();
+        console.error('Browser navigation failed:', error);
+        return { success: false, error };
+      }
+
+      const result = await response.json() as { success: boolean; error?: string };
+      return result;
+    } catch (error) {
+      console.error('Failed to navigate browser:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Navigation failed' 
+      };
+    }
+  }
+
   public async getStatus(): Promise<'running' | 'stopping' | 'stopped' | 'starting'> {
     const running = this._container?.running;
 
@@ -821,6 +860,12 @@ export class MinecraftContainer extends Container {
 
         console.error("Optional plugins", this.pluginFilenamesToEnable);
         
+        if (url.pathname.startsWith('/src/browser/')) {
+          // Route to noVNC websockify on port 6080
+          console.error('browser websocket: noVNC on port 6080');
+          return super.fetch(switchPort(request, 6080));
+        }
+        
         if (url.pathname.startsWith('/src/terminal/')) {
           // Route to the appropriate ttyd instance based on path
           let port = 7681; // Default to Claude
@@ -830,6 +875,9 @@ export class MinecraftContainer extends Container {
           } else if (url.pathname.startsWith('/src/terminal/gemini/ws')) {
             port = 7683;
             console.error('terminal websocket: gemini');
+          } else if (url.pathname.startsWith('/src/terminal/bash/ws')) {
+            port = 7684;
+            console.error('terminal websocket: bash');
           } else {
             console.error('terminal websocket: claude');
           }
@@ -2260,7 +2308,7 @@ class HTTPProxyControl {
   
   private CONTROL_PORT = 8084;
   private DATA_PORT_START = 8085;
-  private DATA_PORT_END = 8109;
+  private DATA_PORT_END = 8100;
 
   constructor(
     private ctx: DurableObject['ctx'],

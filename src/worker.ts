@@ -137,6 +137,25 @@ const elysiaApp = (
   })
 
   /**
+   * Navigate the embedded browser to a URL
+   */
+  .post("/browser/navigate", async ({ body, request }: any) => {
+    try {
+      const { url } = body as { url: string };
+      if (!url || typeof url !== 'string') {
+        return { success: false, error: "URL is required" };
+      }
+
+      const container = getMinecraftContainer(request);
+      const result = await container.navigateBrowser(url);
+      return result;
+    } catch (error) {
+      console.error("Failed to navigate browser:", error);
+      return { success: false, error: error instanceof Error ? error.message : "Failed to navigate" };
+    }
+  })
+
+  /**
    * Get the plugin state. Works when container is stopped.
    */
   .get("/plugins", async ({ request }) => {
@@ -369,8 +388,13 @@ export default {
   async fetch(request: Request, _env: typeof worker.Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // auth methods do not require auth
-    const skipAuth = request.method === 'OPTIONS' || url.pathname.startsWith('/auth/') || url.protocol.startsWith('ws') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/src/terminal/')
+    // auth methods do not require auth - but browser/terminal HTML pages DO require auth
+    // Only skip auth for WebSocket upgrades (ws protocol or /ws path with Upgrade header)
+    const isWebSocketUpgrade = url.protocol.startsWith('ws') || 
+                               (url.pathname.startsWith('/ws') && request.headers.get('Upgrade') === 'websocket') ||
+                               ((url.pathname.startsWith('/src/terminal/') || url.pathname.startsWith('/src/browser/')) && request.headers.get('Upgrade') === 'websocket');
+    
+    const skipAuth = request.method === 'OPTIONS' || url.pathname.startsWith('/auth/') || isWebSocketUpgrade
 
     if (!skipAuth) {
       const authError = await requireAuth(request);
@@ -379,8 +403,8 @@ export default {
       }
     }
 
-    // Handle WebSocket requests (both terminal and RCON)
-    if (url.protocol.startsWith('ws') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/src/terminal/')) {
+    // Handle WebSocket requests (terminal, browser, and RCON)
+    if (url.protocol.startsWith('ws') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/src/terminal/') || url.pathname.startsWith('/src/browser/')) {
       const upgradeHeader = request.headers.get("Upgrade");
       if (upgradeHeader === "websocket" || request.method === 'OPTIONS') {
         return this.handleWebSocket(request, url.pathname);
@@ -425,7 +449,10 @@ export default {
     try {
       const container = getMinecraftContainer(request);
       
-      if (pathname === '/src/terminal/ws') {
+      if (pathname.startsWith('/src/browser/')) {
+        console.error("Forwarding WebSocket to embedded browser (noVNC)");
+        return container.fetch(request);
+      } else if (pathname.startsWith('/src/terminal/')) {
         console.error("Forwarding WebSocket to ttyd");
         return container.fetch(request);
       } else {
