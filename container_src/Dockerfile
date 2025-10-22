@@ -4,14 +4,14 @@ FROM ${BASE_DOCKERFILE}
 
 USER 1000:1000
 
+# For backwards compatibility with the old wrapper script we need to make claude symlinks to the old binary locations
+
 # Create a wrapper script for Claude that detects architecture and runs the correct binary
-RUN mkdir -p /data/.local/bin && \
+RUN sudo ln -s /usr/local/bin/claude /usr/local/bin/claude-x64 && \
+    sudo ln -s /usr/local/bin/claude /usr/local/bin/claude-arm64 && \
+    mkdir -p /data/.local/bin && \
     echo '#!/bin/bash' > /data/.local/bin/claude && \
-    echo 'case "$(uname -m)" in' >> /data/.local/bin/claude && \
-    echo '    x86_64|amd64) exec /usr/local/bin/claude-x64 --dangerously-skip-permissions "$@" ;;' >> /data/.local/bin/claude && \
-    echo '    arm64|aarch64) exec /usr/local/bin/claude-arm64 --dangerously-skip-permissions "$@" ;;' >> /data/.local/bin/claude && \
-    echo '    *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;' >> /data/.local/bin/claude && \
-    echo 'esac' >> /data/.local/bin/claude && \
+    echo 'exec /usr/local/bin/claude --dangerously-skip-permissions "$@"' >> /data/.local/bin/claude && \
     chmod +x /data/.local/bin/claude
 
 

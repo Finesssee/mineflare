@@ -486,6 +486,11 @@
             overflow: hidden;
         }
 
+        .header-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
         #detected-urls-header::before {
             content: '';
             position: absolute;
@@ -522,10 +527,7 @@
             box-shadow: 0 0 8px rgba(87, 166, 78, 0.6);
         }
 
-        #clear-urls-btn {
-            background: linear-gradient(135deg, rgba(255, 107, 107, 0.15), rgba(255, 107, 107, 0.25));
-            border: 2px solid rgba(255, 107, 107, 0.3);
-            color: #ff6b6b;
+        .panel-button {
             border-radius: 8px;
             padding: 6px 14px;
             font-size: 13px;
@@ -538,7 +540,19 @@
             text-transform: uppercase;
         }
 
-        #clear-urls-btn::before {
+        #refresh-urls-btn {
+            background: linear-gradient(135deg, rgba(87, 166, 78, 0.15), rgba(87, 166, 78, 0.25));
+            border: 2px solid rgba(87, 166, 78, 0.3);
+            color: #57A64E;
+        }
+
+        #clear-urls-btn {
+            background: linear-gradient(135deg, rgba(255, 107, 107, 0.15), rgba(255, 107, 107, 0.25));
+            border: 2px solid rgba(255, 107, 107, 0.3);
+            color: #ff6b6b;
+        }
+
+        .panel-button::before {
             content: '';
             position: absolute;
             top: 50%;
@@ -546,25 +560,41 @@
             width: 0;
             height: 0;
             border-radius: 50%;
-            background: rgba(255, 107, 107, 0.3);
             transform: translate(-50%, -50%);
             transition: width 0.4s, height 0.4s;
         }
 
-        #clear-urls-btn:hover::before {
+        .panel-button:hover::before {
             width: 200%;
             height: 200%;
+        }
+
+        .panel-button:hover {
+            transform: translateY(-2px);
+        }
+
+        .panel-button:active {
+            transform: translateY(0);
+        }
+
+        #refresh-urls-btn::before {
+            background: rgba(87, 166, 78, 0.3);
+        }
+
+        #refresh-urls-btn:hover {
+            background: linear-gradient(135deg, rgba(87, 166, 78, 0.25), rgba(87, 166, 78, 0.35));
+            border-color: rgba(87, 166, 78, 0.6);
+            box-shadow: 0 4px 16px rgba(87, 166, 78, 0.4);
+        }
+
+        #clear-urls-btn::before {
+            background: rgba(255, 107, 107, 0.3);
         }
 
         #clear-urls-btn:hover {
             background: linear-gradient(135deg, rgba(255, 107, 107, 0.25), rgba(255, 107, 107, 0.35));
             border-color: rgba(255, 107, 107, 0.6);
-            transform: translateY(-2px);
             box-shadow: 0 4px 16px rgba(255, 107, 107, 0.4);
-        }
-
-        #clear-urls-btn:active {
-            transform: translateY(0);
         }
 
         #detected-urls-list {
@@ -596,7 +626,7 @@
         }
 
         .no-urls {
-            padding: 40px 20px;
+            padding: 20px 20px;
             text-align: center;
             color: rgba(224, 224, 224, 0.3);
             font-size: 13px;
@@ -798,7 +828,7 @@
             <div class="terminal" id="terminal-bash"></div>
         </div>
         <div class="terminal-wrapper" data-terminal="browser">
-            <iframe id="browser-iframe" class="browser-iframe" src="/src/browser/"></iframe>
+            <iframe id="browser-iframe" class="browser-iframe" src="/src/browser"></iframe>
         </div>
     </div>
 
@@ -806,7 +836,10 @@
     <div id="detected-urls-panel">
         <div id="detected-urls-header">
             <span class="panel-title">🔗 Detected Links</span>
-            <button id="clear-urls-btn" title="Clear all URLs">Clear</button>
+            <div class="header-buttons">
+                <button id="refresh-urls-btn" class="panel-button" title="Scan current terminal for URLs">🔄 Refresh</button>
+                <button id="clear-urls-btn" class="panel-button" title="Clear all URLs">Clear</button>
+            </div>
         </div>
         <div id="detected-urls-list">
             <div class="no-urls">Monitoring terminal output for URLs...</div>

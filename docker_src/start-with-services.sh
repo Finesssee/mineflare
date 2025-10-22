@@ -432,7 +432,15 @@ start_chrome() {
   
   (
     while true; do
-      echo "Starting Chrome in kiosk mode (attempt at $(date))"
+      # Check if there's a URL file for navigation
+      if [ -f /tmp/chrome-url.txt ]; then
+        TARGET_URL=$(cat /tmp/chrome-url.txt)
+        echo "Starting Chrome in kiosk mode with URL: $TARGET_URL (attempt at $(date))"
+      else
+        TARGET_URL="https://chatgpt.com"
+        echo "Starting Chrome in kiosk mode (attempt at $(date))"
+      fi
+      
       DISPLAY=:99 LD_LIBRARY_PATH="/opt/chrome:${LD_LIBRARY_PATH:-}" "$CHROME_BINARY" \
         --kiosk \
         --no-sandbox \
@@ -443,7 +451,7 @@ start_chrome() {
         --user-data-dir=/tmp/chrome-profile \
         --window-size=1280,720 \
         --window-position=0,0 \
-        about:blank || echo "Chrome crashed (exit code: $?), restarting in 2 seconds..."
+        "$TARGET_URL" || echo "Chrome crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/chrome.log 2>&1 &
@@ -871,16 +879,6 @@ write_status "Initializing services"
 
 echo "Starting services..."
 
-# Start the file server
-write_status "Starting file server"
-start_file_server
-
-# Start the HTTP proxy server
-write_status "Starting HTTP proxy"
-start_http_proxy
-
-# Start Tailscale in background if it's enabled
-start_tailscale &
 
 # Start VNC services for embedded browser
 write_status "Starting virtual display (Xvfb)" 
@@ -897,6 +895,18 @@ start_chrome &
 
 write_status "Starting browser control server"
 start_browser_control &
+
+
+# Start the file server
+write_status "Starting file server"
+start_file_server
+
+# Start the HTTP proxy server
+write_status "Starting HTTP proxy"
+start_http_proxy
+
+# Start Tailscale in background if it's enabled
+start_tailscale &
 
 # Setup hteetp binary
 write_status "Setting up hteetp"

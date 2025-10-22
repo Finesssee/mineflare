@@ -1,4 +1,4 @@
-import { backendUrl, fetchApi } from '../client/utils/api';
+import { backendUrl, fetchWithAuth } from '../client/utils/api';
 import { Terminal } from '@xterm/xterm';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 
@@ -99,8 +99,70 @@ interface DetectedUrl {
 const detectedUrls: Map<string, DetectedUrl> = new Map();
 const urlBuffer: Map<TerminalType, string> = new Map();
 
-// URL regex - matches common URL patterns
+// Terminal width (set in start-with-services.sh)
+const TERMINAL_WIDTH = 160;
+
+// URL regex - matches common URL patterns including query strings
+// Excludes: whitespace, brackets, quotes, pipes, backslashes
+// Includes: ? & = # / : and other valid URL characters
 const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\]]+/g;
+
+/**
+ * Unwrap URLs that have been split across multiple lines due to terminal width
+ * When a URL wraps, it typically breaks at the terminal width (160 chars)
+ * and continues on the next line without indentation
+ * 
+ * Example: Codex OAuth URLs often wrap like this:
+ *   https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&s
+ *   cope=openid%20profile%20email%20offline_access&code_challenge=x-qBkaOce633yfYHuwrcqH6HELMQFCBC_UDCgkHAi_k&code_challenge_method=S256&id_token_add_organizations=
+ *   true&codex_cli_simplified_flow=true&state=67ujqV52l8vfM71GNpXEIWjYwcez3ZHrTw1YpsVjyEo&originator=codex_cli_rs
+ * 
+ * This function rejoins these fragments into a single valid URL
+ */
+function unwrapUrls(text: string): string {
+  const lines = text.split('\n');
+  const unwrapped: string[] = [];
+  
+  for (let i = 0; i < lines.length; i++) {
+    const currentLine = lines[i];
+    const nextLine = lines[i + 1];
+    
+    // Check if this line might be part of a wrapped URL
+    if (nextLine !== undefined) {
+      // Look for URL pattern at the end of current line
+      const urlEndMatch = currentLine.match(/https?:\/\/[^\s<>"{}|\\^`\]]*$/);
+      
+      if (urlEndMatch) {
+        // Check if next line continues with valid URL characters (no http:// prefix)
+        const urlContinueMatch = nextLine.match(/^[^\s<>"{}|\\^`\]]+/);
+        
+        if (urlContinueMatch && !nextLine.startsWith('http://') && !nextLine.startsWith('https://')) {
+          // This looks like a wrapped URL - join the lines
+          unwrapped.push(currentLine + nextLine);
+          i++; // Skip the next line since we've already processed it
+          continue;
+        }
+      } else {
+        // Check if current line ends with URL characters (continuation from previous)
+        const urlPartMatch = currentLine.match(/^[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+$/);
+        
+        if (urlPartMatch && unwrapped.length > 0) {
+          const prevLine = unwrapped[unwrapped.length - 1];
+          // Check if previous line has a URL in it
+          if (prevLine.match(/https?:\/\//)) {
+            // Join with previous line
+            unwrapped[unwrapped.length - 1] = prevLine + currentLine;
+            continue;
+          }
+        }
+      }
+    }
+    
+    unwrapped.push(currentLine);
+  }
+  
+  return unwrapped.join('\n');
+}
 
 /**
  * Extract and track URLs from terminal output
@@ -118,8 +180,11 @@ function detectUrls(type: TerminalType, text: string) {
     urlBuffer.set(type, currentBuffer.slice(-10240));
   }
 
-  // Extract URLs from buffer
-  const matches = currentBuffer.matchAll(URL_REGEX);
+  // Unwrap URLs that have been split across lines
+  const unwrappedBuffer = unwrapUrls(currentBuffer);
+
+  // Extract URLs from unwrapped buffer
+  const matches = unwrappedBuffer.matchAll(URL_REGEX);
   for (const match of matches) {
     let url = match[0];
 
@@ -141,6 +206,37 @@ function detectUrls(type: TerminalType, text: string) {
 }
 
 /**
+ * Scan the current terminal buffer for URLs
+ * This is used when switching terminals or manually refreshing
+ */
+function scanTerminalForUrls(type: ActualTerminalType) {
+  try {
+    const instance = terminals[type];
+    if (!instance || !instance.terminal) {
+      return;
+    }
+
+    const buffer = instance.terminal.buffer.active;
+    let content = '';
+    
+    // Read all lines from the terminal buffer
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      if (line) {
+        content += line.translateToString(true) + '\n';
+      }
+    }
+    
+    // Detect URLs in the scanned content
+    if (content.trim()) {
+      detectUrls(type, content);
+    }
+  } catch (error) {
+    console.error(`Failed to scan terminal ${type} for URLs:`, error);
+  }
+}
+
+/**
  * Add URL to detected list and update UI
  */
 function addDetectedUrl(type: TerminalType, url: string) {
@@ -156,25 +252,31 @@ function addDetectedUrl(type: TerminalType, url: string) {
 
 /**
  * Update the URL panel in the UI
+ * Only shows URLs from the current terminal
  */
 function updateUrlPanel() {
   const panel = document.getElementById('detected-urls-list');
   if (!panel) return;
 
+  // Filter URLs to only show those from the current terminal
   const urls = Array.from(detectedUrls.values())
+    .filter(item => item.terminal === currentTerminal)
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 10); // Keep last 10 URLs
 
   if (urls.length === 0) {
-    panel.innerHTML = '<div class="no-urls">Monitoring terminal output for URLs...</div>';
+    const terminalName = currentTerminal === 'claude' ? 'Claude' : 
+                        currentTerminal === 'codex' ? 'Codex' : 
+                        currentTerminal === 'gemini' ? 'Gemini' : 
+                        currentTerminal === 'bash' ? 'Bash' :
+                        currentTerminal === 'browser' ? 'Browser' : currentTerminal;
+    panel.innerHTML = `<div class="no-urls">No URLs detected in ${terminalName} terminal.<br>URLs will appear here as they are output.</div>`;
     return;
   }
 
-  panel.innerHTML = urls.map(({ url, terminal }) => {
-    const terminalIcon = terminal === 'claude' ? '🤖' : terminal === 'codex' ? '⚡' : terminal === 'bash' ? '💻' : terminal === 'browser' ? '🌐' : '✨';
+  panel.innerHTML = urls.map(({ url }) => {
     return `
       <div class="detected-url-item">
-        <span class="url-terminal-badge">${terminalIcon}</span>
         <a href="#" class="detected-url-link" data-url="${escapeHtml(url)}" data-action="open">
           ${escapeHtml(url)}
         </a>
@@ -224,11 +326,15 @@ function escapeHtml(str: string): string {
  */
 async function openUrlInBrowser(url: string) {
   try {
+    // Switch to browser tab FIRST so user sees the browser immediately
+    console.log('Switching to browser tab and navigating to:', url);
+    switchTerminal('browser');
+    
     // Show status
     showStatus('Opening URL in browser...', 'connecting');
     
     // Call the browser navigation API
-    const response = await fetchApi('/api/browser/navigate', {
+    const response = await fetchWithAuth('/api/browser/navigate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
@@ -241,10 +347,10 @@ async function openUrlInBrowser(url: string) {
     const result = await response.json() as { success: boolean; error?: string };
     
     if (result.success) {
-      // Switch to browser tab
-      switchTerminal('browser');
-      showStatus('Browser navigated', 'connected');
+      console.log('Browser navigation successful');
+      showStatus('Browser navigated (Chrome restarting...)', 'connected');
     } else {
+      console.error('Browser navigation failed:', result.error);
       showStatus(`Navigation failed: ${result.error}`, 'error');
     }
   } catch (error) {
@@ -412,6 +518,15 @@ function handleSnapshot(type: TerminalType, instance: TerminalInstance, jsonData
     ackSent = true;
 
     console.log(`${type}: Snapshot applied successfully, sent ACK`);
+
+    // Scan snapshot lines for URLs
+    // This is important for detecting URLs when first switching to a terminal
+    if (type !== 'browser') {
+      const content = snapshot.lines.join('\n');
+      if (content.trim()) {
+        detectUrls(type, content);
+      }
+    }
   } catch (err) {
     console.error(`${type}: Failed to apply snapshot`, err);
   } finally {
@@ -507,7 +622,7 @@ async function connect(type: ActualTerminalType) {
 
     try {
         // Fetch WebSocket token
-        const tokenResponse = await fetchApi('/auth/ws-token', {
+        const tokenResponse = await fetchWithAuth('/auth/ws-token', {
             credentials: 'include',
         });
         if (!tokenResponse.ok) {
@@ -545,6 +660,11 @@ async function connect(type: ActualTerminalType) {
 
       if (type === currentTerminal) {
         showStatus(`Connected to ${type}`, 'connected');
+      }
+
+      // Ensure terminal has focus so the helper textarea captures paste
+      if (type === currentTerminal) {
+        instance.terminal.focus();
       }
 
       // Send initial JSON handshake that ttyd expects on every connection
@@ -705,17 +825,43 @@ function setupTerminalDataHandler(type: ActualTerminalType) {
         return;
       }
       
-        // Send input using ttyd protocol: binary with first byte '0' (INPUT)
-        const encoded = textEncoder.encode(data);
-        const message = new Uint8Array(encoded.length + 1);
-        message[0] = '0'.charCodeAt(0); // INPUT command
-        message.set(encoded, 1);
+      // Send input using ttyd protocol: binary with first byte '0' (INPUT)
+      const encoded = textEncoder.encode(data);
+      const message = new Uint8Array(encoded.length + 1);
+      message[0] = '0'.charCodeAt(0); // INPUT command
+      message.set(encoded, 1);
       instance.ws.send(message);
     }
   });
   
   dataHandlersSetup.add(type);
 }
+
+// Fallback: route clipboard paste to the active terminal when its helper isn't focused
+// This helps in cases where focus was lost during tab switches (e.g., Gemini flow)
+document.addEventListener('paste', (event) => {
+  const activeEl = document.activeElement as HTMLElement | null;
+  if (activeEl && activeEl.classList && activeEl.classList.contains('xterm-helper-textarea')) {
+    return; // xterm has focus; let it handle paste natively
+  }
+
+  const type = currentTerminal;
+  if (type === 'browser') return;
+  const instance = terminals[type as ActualTerminalType];
+  if (!instance || !instance.ws || instance.ws.readyState !== WebSocket.OPEN) return;
+
+  const clipboardData = (event.clipboardData || (window as any).clipboardData);
+  const text = clipboardData?.getData('text/plain');
+  if (!text) return;
+
+  event.preventDefault();
+
+  const encoded = textEncoder.encode(text);
+  const message = new Uint8Array(encoded.length + 1);
+  message[0] = '0'.charCodeAt(0);
+  message.set(encoded, 1);
+  instance.ws.send(message);
+});
 
 // Setup data handler for Claude (initially visible)
 setupTerminalDataHandler('claude');
@@ -823,13 +969,26 @@ apiKeyInput.addEventListener('keydown', (e) => {
   }
 });
 
-// Clear URLs button handler
+// Refresh URLs button handler - scans current terminal for URLs
+const refreshUrlsBtn = document.getElementById('refresh-urls-btn');
+if (refreshUrlsBtn) {
+  refreshUrlsBtn.addEventListener('click', () => {
+    if (currentTerminal !== 'browser') {
+      console.log(`Scanning ${currentTerminal} terminal for URLs...`);
+      scanTerminalForUrls(currentTerminal as ActualTerminalType);
+      showStatus(`Scanned ${currentTerminal} terminal`, 'connected');
+    }
+  });
+}
+
+// Clear URLs button handler - clears all URLs
 const clearUrlsBtn = document.getElementById('clear-urls-btn');
 if (clearUrlsBtn) {
   clearUrlsBtn.addEventListener('click', () => {
     detectedUrls.clear();
     urlBuffer.clear();
     updateUrlPanel();
+    showStatus('Cleared all URLs', 'connected');
   });
 }
 
@@ -884,12 +1043,18 @@ function doSwitchTerminal(type: TerminalType) {
   
   currentTerminal = type;
 
+  // Update URL panel to show URLs from new terminal
+  updateUrlPanel();
+
   // Browser tab doesn't need terminal setup
   if (type === 'browser') {
     updateTabConnectionState(type, 'connected');
     showStatus('Browser ready', 'connected');
     return;
   }
+
+  // Scan the terminal buffer for URLs when switching
+  scanTerminalForUrls(type);
 
   // Setup data handler for this terminal if not already done
   setupTerminalDataHandler(type);

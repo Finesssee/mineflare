@@ -863,7 +863,8 @@ export class MinecraftContainer extends Container {
         if (url.pathname.startsWith('/src/browser/')) {
           // Route to noVNC websockify on port 6080
           console.error('browser websocket: noVNC on port 6080');
-          return super.fetch(switchPort(request, 6080));
+          const newRequest = new Request('http://localhost:6080/', request);
+          return super.fetch(switchPort(newRequest, 6080));
         }
         
         if (url.pathname.startsWith('/src/terminal/')) {

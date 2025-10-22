@@ -141,7 +141,7 @@ const elysiaApp = (
    */
   .post("/browser/navigate", async ({ body, request }: any) => {
     try {
-      const { url } = body as { url: string };
+      const { url } = body;
       if (!url || typeof url !== 'string') {
         return { success: false, error: "URL is required" };
       }
@@ -153,6 +153,10 @@ const elysiaApp = (
       console.error("Failed to navigate browser:", error);
       return { success: false, error: error instanceof Error ? error.message : "Failed to navigate" };
     }
+  }, {
+    body: t.Object({
+      url: t.String(),
+    }),
   })
 
   /**
@@ -404,18 +408,41 @@ export default {
     }
 
     // Handle WebSocket requests (terminal, browser, and RCON)
-    if (url.protocol.startsWith('ws') || url.pathname.startsWith('/ws') || url.pathname.startsWith('/src/terminal/') || url.pathname.startsWith('/src/browser/')) {
-      const upgradeHeader = request.headers.get("Upgrade");
-      if (upgradeHeader === "websocket" || request.method === 'OPTIONS') {
-        return this.handleWebSocket(request, url.pathname);
-      }
-      
-      return new Response("Expected Upgrade: websocket", {
-        status: 426,
-      });
-      
+    const upgradeHeader = request.headers.get("Upgrade");
+    const isWebSocketRequest = upgradeHeader === "websocket" && (
+      url.protocol.startsWith('ws') || 
+      url.pathname.startsWith('/ws') || 
+      url.pathname.endsWith('/ws') ||
+      (url.pathname.startsWith('/src/terminal/') && url.pathname.includes('/ws')) ||
+      (url.pathname.startsWith('/src/browser/') && url.pathname.includes('/ws'))
+    );
+    
+    if (isWebSocketRequest || (request.method === 'OPTIONS' && url.pathname.includes('/ws'))) {
+      console.error('websocket request', request.url);
+      return this.handleWebSocket(request, url.pathname);
     }
 
+    if(request.method === 'OPTIONS') {
+      try {
+        console.error('options request', request.url);
+        const response = await app.fetch(request);
+        console.error('options response', response.headers);
+        response.headers.set('Access-Control-Allow-Origin', request.headers.get('Origin') || '*');
+        response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie');
+        response.headers.set('Access-Control-Allow-Credentials', 'true');
+        response.headers.set('Access-Control-Max-Age', '86400');
+        return response;
+      } catch (error) {
+        console.error('options error', error);
+        return new Response(null, {
+          status: 500,
+          headers: {
+            'Content-Type': 'text/plain',
+          },
+        });
+      }
+    }
     return app.fetch(request);
   },
 
@@ -436,12 +463,14 @@ export default {
     // Validate WebSocket upgrade headers
     const upgradeError = validateWebSocketUpgrade(request);
     if (upgradeError) {
+      console.error("WebSocket upgrade error:", upgradeError);
       return upgradeError;
     }
 
     // Validate authentication token
     const authError = await validateWebSocketAuth(request);
     if (authError) {
+      console.error("WebSocket authentication error:", authError);
       return authError;
     }
 
