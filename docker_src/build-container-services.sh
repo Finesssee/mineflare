@@ -150,12 +150,19 @@ download_hteetp() {
 download_ttyd() {
     local log_file="$LOG_DIR/ttyd.log"
     {
-        echo "=== Downloading ttyd binaries (shared-tty fork) ==="
+        echo "=== Downloading ttyd binaries ==="
         
         REPO="eastlondoner/ttyd"
-        VERSION="1.8.0"
         
-        echo "Getting ttyd version $VERSION from $REPO..."
+        echo "Getting latest ttyd version..."
+        VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+        
+        if [ -z "$VERSION" ]; then
+            echo "✗ Failed to get latest ttyd version!"
+            return 1
+        fi
+        
+        echo "Latest ttyd version: $VERSION"
         
         # Download SHA256SUMS for verification
         echo "Downloading SHA256SUMS..."
@@ -222,7 +229,7 @@ download_ttyd() {
         # Clean up SHA256SUMS file
         rm -f SHA256SUMS
         
-        echo "✓ ttyd (shared-tty fork) download completed successfully"
+        echo "✓ ttyd download completed successfully"
     } &> "$log_file"
     
     if [ $? -ne 0 ]; then

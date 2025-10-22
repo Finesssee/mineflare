@@ -104,7 +104,6 @@ const MAX_CONCURRENT_DOWNLOADS = 5;            // Download 5 chunks at once
 //   operationName: string
 // ): Promise<Response> {
 //   let lastError: Error | null = null;
-  
 //   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
 //     try {
 //       console.log(`[FileServer] ${operationName}: Attempt ${attempt}/${MAX_RETRIES}`);
@@ -570,11 +569,14 @@ class FileServer {
       console.log(`[FileServer] [${id}] Creating backup: ${directory} -> ${backupFilename}`);
 
       // Create tar.gz archive using tar command
+      // Note: By default tar stores symlinks as symlinks (doesn't follow them)
       const tempFile = `/tmp/backup_${formatUTCDateYYYYMMDDHH(new Date())}_${id}.tar.gz`;
       const tarProc = spawn([
         "tar",
         "-czf",
         tempFile,
+        "--exclude=./logs",           // Exclude logs directory if it exists
+        "--exclude=./cache",          // Exclude cache directory if it exists
         "-C",
         directory.substring(0, directory.lastIndexOf("/")) || "/",
         dirName,
@@ -582,7 +584,10 @@ class FileServer {
       const tarExit = await tarProc.exited;
       if (tarExit !== 0) {
         const stderr = await new Response(tarProc.stderr).text();
-        throw new Error(`tar command failed with exit code ${tarExit}: ${stderr}`);
+        const stdout = await new Response(tarProc.stdout).text();
+        console.error(`[FileServer] [${id}] tar stderr: ${stderr}`);
+        console.error(`[FileServer] [${id}] tar stdout: ${stdout}`);
+        throw new Error(`tar command failed with exit code ${tarExit}: ${stderr || stdout || 'no error output'}`);
       }
 
       console.log(`[FileServer] [${id}] Archive created: ${tempFile}`);
@@ -715,12 +720,15 @@ class FileServer {
       console.log(`[FileServer] Creating backup: ${directory} -> ${backupFilename}`);
 
       // Create tar.gz archive using tar command
+      // Note: By default tar stores symlinks as symlinks (doesn't follow them)
       const tempFile = `/tmp/backup_${formatUTCDateYYYYMMDDHH(now)}.tar.gz`;
       
       const tarProc = spawn([
         "tar",
         "-czf",
         tempFile,
+        "--exclude=./logs",           // Exclude logs directory if it exists
+        "--exclude=./cache",          // Exclude cache directory if it exists
         "-C",
         directory.substring(0, directory.lastIndexOf("/")) || "/",
         dirName,
@@ -730,7 +738,10 @@ class FileServer {
       
       if (tarExit !== 0) {
         const stderr = await new Response(tarProc.stderr).text();
-        throw new Error(`tar command failed with exit code ${tarExit}: ${stderr}`);
+        const stdout = await new Response(tarProc.stdout).text();
+        console.error(`[FileServer] tar stderr: ${stderr}`);
+        console.error(`[FileServer] tar stdout: ${stdout}`);
+        throw new Error(`tar command failed with exit code ${tarExit}: ${stderr || stdout || 'no error output'}`);
       }
 
       console.log(`[FileServer] Archive created: ${tempFile}`);

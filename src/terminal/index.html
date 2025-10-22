@@ -403,6 +403,308 @@
         .modal-note strong {
             color: #FFB600;
         }
+
+        /* Detected URLs Panel - AAA Game Studio Quality */
+        #detected-urls-panel {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 450px;
+            max-height: 350px;
+            background: linear-gradient(135deg, #0a1612 0%, #1a2e1e 50%, #2a1810 100%);
+            border: 2px solid rgba(87, 166, 78, 0.3);
+            border-radius: 16px;
+            box-shadow:
+                0 20px 60px rgba(0, 0, 0, 0.7),
+                0 8px 32px rgba(0, 0, 0, 0.5),
+                0 0 0 1px rgba(87, 166, 78, 0.2),
+                inset 0 1px 0 rgba(87, 166, 78, 0.15);
+            z-index: 500;
+            display: flex;
+            flex-direction: column;
+            backdrop-filter: blur(12px);
+            overflow: hidden;
+            animation: slideInFromBottom 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes slideInFromBottom {
+            from {
+                opacity: 0;
+                transform: translateY(40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        #detected-urls-panel::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg,
+                transparent 0%,
+                rgba(87, 166, 78, 0.6) 20%,
+                rgba(87, 166, 78, 0.8) 50%,
+                rgba(87, 166, 78, 0.6) 80%,
+                transparent 100%
+            );
+            animation: shimmer 3s ease-in-out infinite;
+        }
+
+        @keyframes shimmer {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+
+        #detected-urls-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 2px solid rgba(87, 166, 78, 0.2);
+            background: linear-gradient(135deg, rgba(87, 166, 78, 0.08) 0%, rgba(26, 46, 30, 0.4) 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        #detected-urls-header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(87, 166, 78, 0.1), transparent);
+            transition: left 0.6s;
+        }
+
+        #detected-urls-header:hover::before {
+            left: 100%;
+        }
+
+        .panel-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #57A64E;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            text-shadow: 0 0 12px rgba(87, 166, 78, 0.5);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .panel-title::before {
+            content: '';
+            width: 4px;
+            height: 20px;
+            background: linear-gradient(180deg, #57A64E, #7cbc73);
+            border-radius: 2px;
+            box-shadow: 0 0 8px rgba(87, 166, 78, 0.6);
+        }
+
+        #clear-urls-btn {
+            background: linear-gradient(135deg, rgba(255, 107, 107, 0.15), rgba(255, 107, 107, 0.25));
+            border: 2px solid rgba(255, 107, 107, 0.3);
+            color: #ff6b6b;
+            border-radius: 8px;
+            padding: 6px 14px;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        #clear-urls-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 107, 107, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.4s, height 0.4s;
+        }
+
+        #clear-urls-btn:hover::before {
+            width: 200%;
+            height: 200%;
+        }
+
+        #clear-urls-btn:hover {
+            background: linear-gradient(135deg, rgba(255, 107, 107, 0.25), rgba(255, 107, 107, 0.35));
+            border-color: rgba(255, 107, 107, 0.6);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(255, 107, 107, 0.4);
+        }
+
+        #clear-urls-btn:active {
+            transform: translateY(0);
+        }
+
+        #detected-urls-list {
+            overflow-y: auto;
+            max-height: 280px;
+            padding: 12px;
+            background: rgba(10, 22, 18, 0.4);
+        }
+
+        #detected-urls-list::-webkit-scrollbar {
+            width: 10px;
+        }
+
+        #detected-urls-list::-webkit-scrollbar-track {
+            background: rgba(10, 22, 18, 0.6);
+            border-radius: 5px;
+            margin: 4px;
+        }
+
+        #detected-urls-list::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, rgba(87, 166, 78, 0.4), rgba(87, 166, 78, 0.6));
+            border-radius: 5px;
+            border: 2px solid rgba(10, 22, 18, 0.6);
+        }
+
+        #detected-urls-list::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, rgba(87, 166, 78, 0.6), rgba(87, 166, 78, 0.8));
+            box-shadow: 0 0 8px rgba(87, 166, 78, 0.4);
+        }
+
+        .no-urls {
+            padding: 40px 20px;
+            text-align: center;
+            color: rgba(224, 224, 224, 0.3);
+            font-size: 13px;
+            font-style: italic;
+            letter-spacing: 0.5px;
+        }
+
+        .detected-url-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            margin: 6px 0;
+            background: linear-gradient(135deg, rgba(26, 46, 30, 0.3), rgba(26, 46, 30, 0.4));
+            border: 2px solid rgba(87, 166, 78, 0.2);
+            border-radius: 10px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .detected-url-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: linear-gradient(180deg, #57A64E, #7cbc73);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .detected-url-item:hover::before {
+            opacity: 1;
+            box-shadow: 0 0 12px rgba(87, 166, 78, 0.6);
+        }
+
+        .detected-url-item:hover {
+            background: linear-gradient(135deg, rgba(26, 46, 30, 0.5), rgba(26, 46, 30, 0.6));
+            border-color: rgba(87, 166, 78, 0.5);
+            transform: translateX(-4px);
+            box-shadow:
+                0 4px 16px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(87, 166, 78, 0.2);
+        }
+
+        .url-terminal-badge {
+            font-size: 16px;
+            flex-shrink: 0;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+        }
+
+        .detected-url-link {
+            flex: 1;
+            color: #57A64E;
+            text-decoration: none;
+            font-size: 12px;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-weight: 500;
+            letter-spacing: 0.3px;
+            transition: all 0.2s;
+        }
+
+        .detected-url-link:hover {
+            color: #7cbc73;
+            text-shadow: 0 0 8px rgba(87, 166, 78, 0.5);
+        }
+
+        .url-copy-btn {
+            background: linear-gradient(135deg, rgba(87, 166, 78, 0.15), rgba(87, 166, 78, 0.25));
+            border: 2px solid rgba(87, 166, 78, 0.3);
+            color: #57A64E;
+            border-radius: 8px;
+            padding: 6px 10px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            flex-shrink: 0;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .url-copy-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(87, 166, 78, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.4s, height 0.4s;
+        }
+
+        .url-copy-btn:hover::before {
+            width: 200%;
+            height: 200%;
+        }
+
+        .url-copy-btn:hover {
+            background: linear-gradient(135deg, rgba(87, 166, 78, 0.25), rgba(87, 166, 78, 0.35));
+            border-color: rgba(87, 166, 78, 0.6);
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(87, 166, 78, 0.4);
+            text-shadow: 0 0 8px rgba(87, 166, 78, 0.6);
+        }
+
+        .url-copy-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* Responsive adjustments for smaller screens */
+        @media (max-width: 768px) {
+            #detected-urls-panel {
+                width: calc(100vw - 40px);
+                max-width: 450px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -439,6 +741,17 @@
         </div>
         <div class="terminal-wrapper" data-terminal="gemini">
             <div class="terminal" id="terminal-gemini"></div>
+        </div>
+    </div>
+
+    <!-- Detected URLs Panel -->
+    <div id="detected-urls-panel">
+        <div id="detected-urls-header">
+            <span class="panel-title">🔗 Detected Links</span>
+            <button id="clear-urls-btn" title="Clear all URLs">Clear</button>
+        </div>
+        <div id="detected-urls-list">
+            <div class="no-urls">Monitoring terminal output for URLs...</div>
         </div>
     </div>
 

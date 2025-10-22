@@ -87,6 +87,138 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 let currentTerminal: TerminalType = 'claude';
 
+// URL detection
+interface DetectedUrl {
+  url: string;
+  timestamp: number;
+  terminal: TerminalType;
+}
+
+const detectedUrls: Map<string, DetectedUrl> = new Map();
+const urlBuffer: Map<TerminalType, string> = new Map();
+
+// URL regex - matches common URL patterns
+const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\]]+/g;
+
+/**
+ * Extract and track URLs from terminal output
+ */
+function detectUrls(type: TerminalType, text: string) {
+  const decoder = new TextDecoder();
+  const content = typeof text === 'string' ? text : decoder.decode(text);
+
+  // Add to buffer for multi-line detection
+  const currentBuffer = (urlBuffer.get(type) || '') + content;
+  urlBuffer.set(type, currentBuffer);
+
+  // Keep buffer manageable (last 10KB)
+  if (currentBuffer.length > 10240) {
+    urlBuffer.set(type, currentBuffer.slice(-10240));
+  }
+
+  // Extract URLs from buffer
+  const matches = currentBuffer.matchAll(URL_REGEX);
+  for (const match of matches) {
+    let url = match[0];
+
+    // Clean up common terminal artifacts
+    url = url.replace(/\x1b\[[0-9;]*[mGKH]/g, ''); // Remove ANSI codes
+    url = url.replace(/[\x00-\x1f\x7f]/g, ''); // Remove control characters
+    url = url.replace(/[,;.:!?]$/, ''); // Remove trailing punctuation
+
+    // Validate URL format
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        addDetectedUrl(type, url);
+      }
+    } catch (e) {
+      // Invalid URL, skip
+    }
+  }
+}
+
+/**
+ * Add URL to detected list and update UI
+ */
+function addDetectedUrl(type: TerminalType, url: string) {
+  if (!detectedUrls.has(url)) {
+    detectedUrls.set(url, {
+      url,
+      timestamp: Date.now(),
+      terminal: type
+    });
+    updateUrlPanel();
+  }
+}
+
+/**
+ * Update the URL panel in the UI
+ */
+function updateUrlPanel() {
+  const panel = document.getElementById('detected-urls-list');
+  if (!panel) return;
+
+  const urls = Array.from(detectedUrls.values())
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, 10); // Keep last 10 URLs
+
+  if (urls.length === 0) {
+    panel.innerHTML = '<div class="no-urls">Monitoring terminal output for URLs...</div>';
+    return;
+  }
+
+  panel.innerHTML = urls.map(({ url, terminal }) => {
+    const terminalIcon = terminal === 'claude' ? '🤖' : terminal === 'codex' ? '⚡' : '✨';
+    return `
+      <div class="detected-url-item">
+        <span class="url-terminal-badge">${terminalIcon}</span>
+        <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="detected-url-link">
+          ${escapeHtml(url)}
+        </a>
+        <button class="url-copy-btn" data-url="${escapeHtml(url)}" title="Copy URL">📋</button>
+      </div>
+    `;
+  }).join('');
+
+  // Add copy button handlers
+  panel.querySelectorAll('.url-copy-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const url = (btn as HTMLElement).dataset.url;
+      if (url) {
+        navigator.clipboard.writeText(url).then(() => {
+          const originalText = btn.textContent;
+          btn.textContent = '✓';
+          setTimeout(() => btn.textContent = originalText, 1000);
+        });
+      }
+    });
+  });
+}
+
+/**
+ * Simple HTML escape to prevent XSS
+ */
+function escapeHtml(str: string): string {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+/**
+ * Clear URLs for a specific terminal
+ */
+function clearUrlsForTerminal(type: TerminalType) {
+  for (const [url, info] of detectedUrls.entries()) {
+    if (info.terminal === type) {
+      detectedUrls.delete(url);
+    }
+  }
+  urlBuffer.delete(type);
+  updateUrlPanel();
+}
+
 /**
  * Handle SESSION_RESIZE command from server (command '4')
  * Server controls terminal dimensions in shared PTY mode
@@ -403,7 +535,12 @@ async function connect(type: TerminalType) {
         if (cmd === '0') {
           // OUTPUT: Write the rest of the data to terminal
           if (data.length > 1) {
-            instance.terminal.write(data.subarray(1));
+            const output = data.subarray(1);
+            instance.terminal.write(output);
+
+            // Detect URLs in the output
+            const outputText = textDecoder.decode(output);
+            detectUrls(type, outputText);
           }
         } else if (cmd === '1') {
           // SET_WINDOW_TITLE
@@ -536,40 +673,8 @@ function setupTerminalDataHandler(type: TerminalType) {
 // Setup data handler for Claude (initially visible)
 setupTerminalDataHandler('claude');
 
-// Handle paste events on terminal containers
-// This allows CMD+V/Ctrl+V to work while letting Ctrl+C pass through to the terminal
-function setupPasteHandler(type: TerminalType) {
-  const element = document.getElementById(`terminal-${type}`)!;
-  
-  element.addEventListener('paste', async (e) => {
-    const instance = terminals[type];
-    
-    // Only handle paste if this terminal is active and connected
-    if (type !== currentTerminal) return;
-    if (!instance.ws || instance.ws.readyState !== WebSocket.OPEN) return;
-    
-    // Prevent default to avoid interference
-    e.preventDefault();
-    
-    // Get clipboard data
-    const clipboardData = e.clipboardData;
-    if (!clipboardData) return;
-    
-    const text = clipboardData.getData('text/plain');
-    if (!text) return;
-    
-    console.log(`${type}: Pasting ${text.length} characters`);
-    
-    // Send through terminal's onData to ensure proper handling
-    // This will trigger our data handler which sends to WebSocket
-    instance.terminal.paste(text);
-  });
-}
-
-// Setup paste handlers for all terminals
-setupPasteHandler('claude');
-setupPasteHandler('codex');
-setupPasteHandler('gemini');
+// xterm.js handles paste events natively through its onData handler
+// No custom paste handling needed - CMD+V/Ctrl+V work out of the box
 
 // In shared PTY mode, terminal resizing is controlled by the server
 // Window resize events don't trigger terminal resizes - the container scrolls instead
@@ -601,18 +706,20 @@ function hideApiKeyModal() {
 
 function initializeGeminiSettings(instance: TerminalInstance, apiKey: string) {
   // Wait for terminal to be ready, then send commands to set up Gemini
+  // Escape single quotes in the API key for safe shell usage
+  const escapedKey = apiKey.replace(/'/g, "'\\''");
+  
+  // Use printf instead of heredoc to avoid multi-line command issues
+  // Write JSON structure using printf with format string
   const commands = [
     `mkdir -p /data/.gemini\n`,
-    `cat > /data/.gemini/settings.json << 'GEMINI_EOF'\n`,
-    `{\n`,
-    `  "apiKey": "${apiKey}"\n`,
-    `}\n`,
-    `GEMINI_EOF\n`,
-    `export GEMINI_API_KEY="${apiKey}"\n`,
+    `printf '{\\n  "geminicodeassist.geminiApiKey": "%s"\\n}\\n' '${escapedKey}' > /data/.gemini/settings.json\n`,
+    `export GEMINI_API_KEY='${escapedKey}'\n`,
     `clear\n`,
     `echo "✨ Gemini API key configured successfully!"\n`,
     `echo "You can now use Gemini. Try typing your first prompt."\n`,
-    `echo ""\n`
+    `echo ""\n`,
+    `GEMINI_API_KEY='${escapedKey}' gemini`
   ];
 
   // Send commands after a short delay to ensure connection is established
@@ -626,7 +733,7 @@ function initializeGeminiSettings(instance: TerminalInstance, apiKey: string) {
           message.set(encoded, 1);
           instance.ws.send(message);
         }
-      }, index * 50); // Small delay between commands
+      }, index * 100); // Slightly longer delay between commands for reliability
     });
   }, 500);
 }
@@ -668,6 +775,16 @@ apiKeyInput.addEventListener('keydown', (e) => {
     modalSaveBtn.click();
   }
 });
+
+// Clear URLs button handler
+const clearUrlsBtn = document.getElementById('clear-urls-btn');
+if (clearUrlsBtn) {
+  clearUrlsBtn.addEventListener('click', () => {
+    detectedUrls.clear();
+    urlBuffer.clear();
+    updateUrlPanel();
+  });
+}
 
 // Handle tab switching
 const tabs = document.querySelectorAll('.tab');

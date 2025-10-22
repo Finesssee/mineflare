@@ -179,7 +179,6 @@ export class MinecraftContainer extends Container {
 
     constructor(ctx: DurableObject['ctx'], env: Env, options?: ContainerOptions) {
         super(ctx, env);
-        console.error("constructor");
         if (ctx.container === undefined) {
           throw new Error(
             'Containers have not been enabled for this Durable Object class. Have you correctly setup your Wrangler config? More info: https://developers.cloudflare.com/containers/get-started/#configuration'
@@ -326,30 +325,57 @@ export class MinecraftContainer extends Container {
     
     override async stop() {
       console.error("stopppppp");
-      this.recordSessionStop();
+      
+      // Check if container is actually running before attempting backup
+      const currentStatus = await this.getStatus();
+      console.error("Container status before stop:", currentStatus);
+      
+      // Only attempt backup if container is running
       let backupSuccess = false;
-      // Perform backup before shutdown
-      try {
-        console.error("Triggering backup before container shutdown...");
-        const backupResult = await this.performBackup();
-        if (backupResult.success) {
-          backupSuccess = true;
-          console.error("Pre-shutdown backup completed successfully:", backupResult.backups);
-        } else {
-          console.error("Pre-shutdown backup failed:", backupResult.error);
+      if (currentStatus === 'running') {
+        
+        // Perform backup before shutdown
+        try {
+          console.error("Triggering backup before container shutdown...");
+          const backupResult = await this.performBackup();
+          if (backupResult.success) {
+            backupSuccess = true;
+            console.error("Pre-shutdown backup completed successfully:", backupResult.backups);
+          } else {
+            console.error("Pre-shutdown backup failed:", backupResult.error);
+          }
+        } catch (error) {
+          console.error("Error during pre-shutdown backup (continuing with shutdown):", error);
         }
-      } catch (error) {
-        console.error("Error during pre-shutdown backup (continuing with shutdown):", error);
+        
+        this.recordSessionStop();
+        // don't set stopping until after the backup is taken or it prevents rcon.
+        this.stopping = true;
+        
+        // if backup failed, give the container a shot at it
+        if(!backupSuccess) {
+          await super.stop("SIGTERM");
+          return;
+        }
+        // just kill the container
+        await super.stop("SIGKILL");
+      } else if (currentStatus === 'stopped' || currentStatus === 'stopping') {
+        // Container is already stopped or stopping, just record the session stop
+        this.recordSessionStop();
+        this.stopping = false;
+        console.error("Container already stopped, skipping backup and shutdown");
+      } else {
+        // Container is starting or in an unknown state, try to stop it
+        this.recordSessionStop();
+        this.stopping = true;
+        console.error("Container in state:", currentStatus, "attempting to stop");
+        try {
+          await super.stop("SIGTERM");
+        } catch (error) {
+          console.error("Failed to stop container, it may already be stopped:", error);
+          this.stopping = false;
+        }
       }
-      // don't set stopping until after the backup is taken or it prevents rcon.
-      this.stopping = true;
-      // if backup failed, give the container a shot at it
-      if(!backupSuccess) {
-        await super.stop("SIGTERM");
-        return;
-      }
-      // just kill the container
-      await super.stop("SIGKILL");
     }
 
     // Optional lifecycle hooks

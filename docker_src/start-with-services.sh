@@ -32,6 +32,45 @@ write_status() {
   echo "[Status] $1"
 }
 
+ensure_version_specific_plugins() {
+  echo "Ensuring version-specific plugins are correctly linked..."
+  
+  # Get current Minecraft version from environment
+  CURRENT_VERSION="${VERSION:-1.21.10}"
+  echo "Current Minecraft version: $CURRENT_VERSION"
+  
+  # Define version-specific plugins and their patterns
+  # These plugins are stored in /opt/minecraft/plugins/ and symlinked to /data/plugins/
+  declare -A VERSION_PLUGINS=(
+    ["dynmap"]="Dynmap-3.7-beta-11-spigot-${CURRENT_VERSION}.jar"
+  )
+  
+  for plugin in "${!VERSION_PLUGINS[@]}"; do
+    version_file="/opt/minecraft/plugins/${VERSION_PLUGINS[$plugin]}"
+    plugin_link="/data/plugins/${plugin}.jar"
+    
+    if [ -f "$version_file" ]; then
+      # Check if the symlink exists and points to the correct file
+      if [ ! -L "$plugin_link" ] || [ "$(readlink "$plugin_link")" != "$version_file" ]; then
+        # Remove existing file/symlink/directory if it exists
+        if [ -e "$plugin_link" ] || [ -L "$plugin_link" ]; then
+          echo "Removing existing plugin file/symlink: $plugin_link"
+          rm -rf "$plugin_link"
+        fi
+        
+        echo "Linking ${plugin} to version-specific file: $version_file"
+        ln -sf "$version_file" "$plugin_link"
+      else
+        echo "${plugin} already correctly linked to $version_file"
+      fi
+    else
+      echo "Warning: Version-specific file not found: $version_file"
+    fi
+  done
+  
+  echo "Version-specific plugin linking completed"
+}
+
 do_optional_plugins() {
   # Temporarily disable exit-on-error for this function
   set +e
@@ -643,7 +682,7 @@ start_ttyd() {
         --writable \
         --client-option fontSize=14 \
         --client-option "theme=$TTYD_THEME" \
-        gemini || echo "ttyd (Gemini) crashed (exit code: $?), restarting in 2 seconds..."
+        bash || echo "ttyd (Gemini) crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/ttyd-gemini.log 2>&1 &
@@ -755,6 +794,80 @@ handle_shutdown() {
   # Exit
   echo "Shutdown complete"
   exit 0
+}
+
+setup_server_symlinks() {
+  echo "Setting up server jar symlinks..."
+  
+  # Get current Minecraft version from environment
+  CURRENT_VERSION="${VERSION:-1.21.10}"
+  echo "Current Minecraft version: $CURRENT_VERSION"
+  
+  # Define server jar patterns to symlink
+  SERVER_JAR_PATTERNS=(
+    "paper-*.jar"
+    "spigot-*.jar"
+    "bukkit-*.jar"
+    "minecraft_server*.jar"
+    "server.jar"
+  )
+  
+  # Also symlink the .env files that mc-image-helper creates
+  ENV_FILE_PATTERNS=(
+    ".paper-*.env"
+    ".spigot-*.env"
+    ".bukkit-*.env"
+  )
+  
+  symlink_count=0
+  
+  # Create symlinks for server jar files
+  for pattern in "${SERVER_JAR_PATTERNS[@]}"; do
+    for jar_file in /opt/minecraft/server/${pattern}; do
+      if [ -f "$jar_file" ]; then
+        filename=$(basename "$jar_file")
+        target_file="/data/${filename}"
+        
+        # Remove existing file/symlink/directory if it exists
+        if [ -e "$target_file" ] || [ -L "$target_file" ]; then
+          echo "Removing existing file/symlink: $target_file"
+          rm -rf "$target_file"
+        fi
+        
+        # Create symlink
+        ln -sf "$jar_file" "$target_file"
+        echo "Created server jar symlink: $target_file -> $jar_file"
+        symlink_count=$((symlink_count + 1))
+      fi
+    done
+  done
+  
+  # Create symlinks for environment files
+  for pattern in "${ENV_FILE_PATTERNS[@]}"; do
+    for env_file in /opt/minecraft/server/${pattern}; do
+      if [ -f "$env_file" ]; then
+        filename=$(basename "$env_file")
+        target_file="/data/${filename}"
+        
+        # Remove existing file/symlink/directory if it exists
+        if [ -e "$target_file" ] || [ -L "$target_file" ]; then
+          echo "Removing existing file/symlink: $target_file"
+          rm -rf "$target_file"
+        fi
+        
+        # Create symlink
+        ln -sf "$env_file" "$target_file"
+        echo "Created env file symlink: $target_file -> $env_file"
+        symlink_count=$((symlink_count + 1))
+      fi
+    done
+  done
+  
+  if [ $symlink_count -eq 0 ]; then
+    echo "No server jar files found to symlink"
+  else
+    echo "Server jar symlinks created ($symlink_count symlinks)"
+  fi
 }
 
 restore_from_backup() {
@@ -893,10 +1006,18 @@ sudo chown -R 1000:1000 /data || true
 sudo chmod -R u+rwX /data || true
 restore_from_backup || (sleep 15 && restore_from_backup)
 
+# Set up server jar symlinks after restore (in case restore overwrote them)
+write_status "Setting up server jar symlinks"
+setup_server_symlinks || true
+
 
 # Start the web terminal (ttyd) after the backups are restored
 write_status "Starting web terminal"
 start_ttyd
+
+# Ensure version-specific plugins are correctly linked
+write_status "Ensuring version-specific plugins"
+ensure_version_specific_plugins || true
 
 # Install optional plugins
 write_status "Installing optional plugins"
