@@ -538,10 +538,6 @@ function handleSnapshot(type: TerminalType, instance: TerminalInstance, jsonData
   }
 }
 
-// API Key management
-const API_KEY_STORAGE_KEY = 'mineflare_gemini_api_key';
-let pendingTerminalSwitch: ActualTerminalType | null = null;
-
 // Update tab visual state based on connection status
 function updateTabConnectionState(type: TerminalType, state: 'connected' | 'connecting' | 'disconnected') {
   const tab = document.querySelector(`.tab[data-terminal="${type}"]`);
@@ -679,14 +675,6 @@ async function connect(type: ActualTerminalType) {
       // In shared PTY mode, the server will send SESSION_RESIZE to set terminal dimensions
       // after creating the shared process
 
-      // Initialize Gemini settings if this is the first connection
-      if (type === 'gemini' && !geminiInitialized) {
-        const apiKey = getGeminiApiKey();
-        if (apiKey) {
-          geminiInitialized = true;
-          initializeGeminiSettings(instance, apiKey);
-        }
-      }
     };
 
     instance.ws.onmessage = (event) => {
@@ -841,8 +829,21 @@ function setupTerminalDataHandler(type: ActualTerminalType) {
 // This helps in cases where focus was lost during tab switches (e.g., Gemini flow)
 document.addEventListener('paste', (event) => {
   const activeEl = document.activeElement as HTMLElement | null;
+  
+  // Don't intercept paste if xterm has focus
   if (activeEl && activeEl.classList && activeEl.classList.contains('xterm-helper-textarea')) {
     return; // xterm has focus; let it handle paste natively
+  }
+
+  // Don't intercept paste if a form input/textarea has focus (e.g., API key modal)
+  if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+    return; // Let the input handle paste normally
+  }
+
+  // Don't intercept paste if modal is active
+  const modalOverlay = document.getElementById('modal-overlay');
+  if (modalOverlay && modalOverlay.classList.contains('active')) {
+    return; // Modal is open, don't intercept
   }
 
   const type = currentTerminal;
@@ -871,103 +872,6 @@ setupTerminalDataHandler('claude');
 
 // In shared PTY mode, terminal resizing is controlled by the server
 // Window resize events don't trigger terminal resizes - the container scrolls instead
-
-// API Key Modal Management
-const modalOverlay = document.getElementById('modal-overlay')!;
-const apiKeyInput = document.getElementById('gemini-api-key') as HTMLInputElement;
-const modalSaveBtn = document.getElementById('modal-save')!;
-const modalCancelBtn = document.getElementById('modal-cancel')!;
-
-function getGeminiApiKey(): string | null {
-  return localStorage.getItem(API_KEY_STORAGE_KEY);
-}
-
-function setGeminiApiKey(key: string) {
-  localStorage.setItem(API_KEY_STORAGE_KEY, key);
-}
-
-function showApiKeyModal() {
-  modalOverlay.classList.add('active');
-  apiKeyInput.value = getGeminiApiKey() || '';
-  apiKeyInput.focus();
-}
-
-function hideApiKeyModal() {
-  modalOverlay.classList.remove('active');
-  apiKeyInput.value = '';
-}
-
-function initializeGeminiSettings(instance: TerminalInstance, apiKey: string) {
-  // Wait for terminal to be ready, then send commands to set up Gemini
-  // Escape single quotes in the API key for safe shell usage
-  const escapedKey = apiKey.replace(/'/g, "'\\''");
-  
-  // Use printf instead of heredoc to avoid multi-line command issues
-  // Write JSON structure using printf with format string
-  const commands = [
-    `mkdir -p /data/.gemini\n`,
-    `printf '{\\n  "geminicodeassist.geminiApiKey": "%s"\\n}\\n' '${escapedKey}' > /data/.gemini/settings.json\n`,
-    `export GEMINI_API_KEY='${escapedKey}'\n`,
-    `clear\n`,
-    `echo "✨ Gemini API key configured successfully!"\n`,
-    `echo "You can now use Gemini. Try typing your first prompt."\n`,
-    `echo ""\n`,
-    `GEMINI_API_KEY='${escapedKey}' gemini`
-  ];
-
-  // Send commands after a short delay to ensure connection is established
-  setTimeout(() => {
-    commands.forEach((cmd, index) => {
-      setTimeout(() => {
-        if (instance.ws && instance.ws.readyState === WebSocket.OPEN) {
-          const encoded = textEncoder.encode(cmd);
-          const message = new Uint8Array(encoded.length + 1);
-          message[0] = '0'.charCodeAt(0);
-          message.set(encoded, 1);
-          instance.ws.send(message);
-        }
-      }, index * 100); // Slightly longer delay between commands for reliability
-    });
-  }, 500);
-}
-
-// Modal event handlers
-modalSaveBtn.addEventListener('click', () => {
-  const apiKey = apiKeyInput.value.trim();
-  if (!apiKey) {
-    apiKeyInput.focus();
-    return;
-  }
-  
-  setGeminiApiKey(apiKey);
-  hideApiKeyModal();
-  
-  // If there was a pending terminal switch, complete it now
-  if (pendingTerminalSwitch === 'gemini') {
-    pendingTerminalSwitch = null;
-    doSwitchTerminal('gemini');
-  }
-});
-
-modalCancelBtn.addEventListener('click', () => {
-  hideApiKeyModal();
-  pendingTerminalSwitch = null;
-});
-
-// Close modal on Escape key
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && modalOverlay.classList.contains('active')) {
-    hideApiKeyModal();
-    pendingTerminalSwitch = null;
-  }
-});
-
-// Allow Enter key to save
-apiKeyInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    modalSaveBtn.click();
-  }
-});
 
 // Refresh URLs button handler - scans current terminal for URLs
 const refreshUrlsBtn = document.getElementById('refresh-urls-btn');
@@ -1004,19 +908,6 @@ tabs.forEach(tab => {
 });
 
 function switchTerminal(type: TerminalType) {
-  // Browser doesn't need special setup
-  if (type === 'browser') {
-    doSwitchTerminal(type);
-    return;
-  }
-  
-  // Check if Gemini requires API key
-  if (type === 'gemini' && !getGeminiApiKey()) {
-    pendingTerminalSwitch = type;
-    showApiKeyModal();
-    return;
-  }
-  
   doSwitchTerminal(type);
 }
 
@@ -1080,9 +971,6 @@ function doSwitchTerminal(type: TerminalType) {
     showStatus(`Connecting to ${type}...`, 'connecting');
   }
 }
-
-// Track if Gemini has been initialized
-let geminiInitialized = false;
 
 // Focus initial terminal
 terminals.claude.terminal.focus();

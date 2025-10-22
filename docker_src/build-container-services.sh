@@ -354,11 +354,27 @@ download_codex() {
     {
         echo "=== Downloading Codex binaries ==="
         
-        CODEX_VERSION="rust-v0.46.0"
-        echo "Codex version: $CODEX_VERSION"
+        REPO="openai/codex"
+        
+        echo "Getting latest Codex version..."
+        CODEX_TAG=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+        
+        if [ -z "$CODEX_TAG" ]; then
+            echo "✗ Failed to get latest Codex version!"
+            return 1
+        fi
+        
+        # Ensure the rust- prefix is present
+        if [[ "$CODEX_TAG" != rust-* ]]; then
+            CODEX_VERSION="rust-${CODEX_TAG}"
+        else
+            CODEX_VERSION="$CODEX_TAG"
+        fi
+        
+        echo "Latest Codex version: $CODEX_VERSION"
         
         echo "Downloading codex-linux-x64..."
-        CODEX_URL_X64="https://github.com/openai/codex/releases/download/${CODEX_VERSION}/codex-x86_64-unknown-linux-gnu.tar.gz"
+        CODEX_URL_X64="https://github.com/$REPO/releases/download/${CODEX_VERSION}/codex-x86_64-unknown-linux-gnu.tar.gz"
         if curl -fsSL -o codex-x64.tar.gz "$CODEX_URL_X64"; then
             echo "✓ Downloaded codex-x64.tar.gz"
             tar -xzf codex-x64.tar.gz -C .
@@ -412,11 +428,20 @@ build_gemini() {
     {
         echo "=== Building Gemini CLI ==="
         
-        GEMINI_VERSION="v0.9.0"
-        echo "Gemini CLI version: $GEMINI_VERSION"
+        REPO="google-gemini/gemini-cli"
+        
+        echo "Getting latest Gemini CLI version..."
+        GEMINI_VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+        
+        if [ -z "$GEMINI_VERSION" ]; then
+            echo "✗ Failed to get latest Gemini CLI version!"
+            return 1
+        fi
+        
+        echo "Latest Gemini CLI version: $GEMINI_VERSION"
         
         echo "Downloading gemini.js..."
-        GEMINI_URL="https://github.com/google-gemini/gemini-cli/releases/download/${GEMINI_VERSION}/gemini.js"
+        GEMINI_URL="https://github.com/$REPO/releases/download/${GEMINI_VERSION}/gemini.js"
         if curl -fsSL -o gemini.js "$GEMINI_URL"; then
             echo "✓ Downloaded gemini.js"
             ls -lh ./gemini.js
@@ -534,29 +559,29 @@ echo ""
 echo "Starting parallel builds and downloads..."
 echo ""
 
-# Run all tasks in parallel
-build_http_proxy &
+# Run all tasks in parallel with a retry
+( build_http_proxy || build_http_proxy ) &
 PID_HTTP_PROXY=$!
 
-build_file_server &
+( build_file_server || build_file_server ) &
 PID_FILE_SERVER=$!
 
-download_hteetp &
+( download_hteetp || download_hteetp ) &
 PID_HTEETP=$!
 
-download_ttyd &
+( download_ttyd || download_ttyd ) &
 PID_TTYD=$!
 
-download_claude &
+( download_claude || download_claude ) &
 PID_CLAUDE=$!
 
-download_codex &
+( download_codex || download_codex ) &
 PID_CODEX=$!
 
-build_gemini &
+( build_gemini || build_gemini ) &
 PID_GEMINI=$!
 
-download_chrome &
+( download_chrome || download_chrome ) &
 PID_CHROME=$!
 
 # Wait for all tasks and collect exit codes (bash 3.2 compatible)

@@ -481,6 +481,7 @@ start_ttyd() {
 
   # Run ttyd for Claude (port 7681) with shared PTY mode
   (
+    export CLAUDE_HOME="/data/.local/claude"
     while true; do
       echo "Starting ttyd for Claude on port $CLAUDE_PORT with shared PTY mode (attempt at $(date))"
       "$TTYD_BINARY" \
@@ -493,7 +494,7 @@ start_ttyd() {
         --writable \
         --client-option fontSize=14 \
         --client-option "theme=$TTYD_THEME" \
-        claude || echo "ttyd (Claude) crashed (exit code: $?), restarting in 2 seconds..."
+        claude --continue || echo "ttyd (Claude) crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/ttyd-claude.log 2>&1 &
@@ -502,6 +503,7 @@ start_ttyd() {
 
   # Run ttyd for Codex (port 7682) with shared PTY mode
   (
+    export CODEX_HOME="/data/.local/codex"
     while true; do
       echo "Starting ttyd for Codex on port $CODEX_PORT with shared PTY mode (attempt at $(date))"
       "$TTYD_BINARY" \
@@ -523,6 +525,7 @@ start_ttyd() {
 
   # Run ttyd for Gemini (port 7683) with shared PTY mode
   (
+    export GEMINI_SUPPRESS_HOME_WARNING=1
     while true; do
       echo "Starting ttyd for Gemini on port $GEMINI_PORT with shared PTY mode (attempt at $(date))"
       "$TTYD_BINARY" \
@@ -535,7 +538,7 @@ start_ttyd() {
         --writable \
         --client-option fontSize=14 \
         --client-option "theme=$TTYD_THEME" \
-        bash || echo "ttyd (Gemini) crashed (exit code: $?), restarting in 2 seconds..."
+        gemini --prompt-interactive 'hi' || echo "ttyd (Gemini) crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/ttyd-gemini.log 2>&1 &

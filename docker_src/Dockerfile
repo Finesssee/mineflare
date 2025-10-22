@@ -48,6 +48,7 @@ RUN apt-get update \
         python3 \
         x11-utils \
         xdotool \
+        ripgrep \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && mkdir -p $(dirname "${TAILSCALE_STATE_DIR}") \
     && mkdir -p /data/plugins \
