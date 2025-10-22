@@ -500,18 +500,18 @@ download_chrome() {
         if curl -fsSL -o chromium-x64.zip "$CHROMIUM_URL_X64"; then
             echo "✓ Downloaded chromium-x64.zip"
             
-            # Extract the entire bundle
-            unzip -q chromium-x64.zip
-            if [ -d "./chrome-linux" ]; then
+            # Extract the entire bundle to a unique directory
+            unzip -q chromium-x64.zip -d chrome-linux-x64-tmp
+            if [ -d "./chrome-linux-x64-tmp/chrome-linux" ]; then
                 # Create tarball of the entire bundle
-                tar -czf chrome-x64.tar.gz -C chrome-linux .
+                tar -czf chrome-x64.tar.gz -C chrome-linux-x64-tmp/chrome-linux .
                 chmod +x chrome-x64.tar.gz
                 # Clean up
-                rm -rf chromium-x64.zip chrome-linux
+                rm -rf chromium-x64.zip chrome-linux-x64-tmp
                 ls -lh ./chrome-x64.tar.gz
             else
                 echo "✗ Failed to extract Chromium bundle for x64!"
-                rm -rf chromium-x64.zip chrome-linux
+                rm -rf chromium-x64.zip chrome-linux-x64-tmp
                 return 1
             fi
         else
@@ -525,18 +525,18 @@ download_chrome() {
         if curl -fsSL -o chromium-arm64.zip "$CHROMIUM_URL_ARM64"; then
             echo "✓ Downloaded chromium-arm64.zip"
             
-            # Extract the entire bundle
-            unzip -q chromium-arm64.zip
-            if [ -d "./chrome-linux" ]; then
+            # Extract the entire bundle to a unique directory
+            unzip -q chromium-arm64.zip -d chrome-linux-arm64-tmp
+            if [ -d "./chrome-linux-arm64-tmp/chrome-linux" ]; then
                 # Create tarball of the entire bundle
-                tar -czf chrome-arm64.tar.gz -C chrome-linux .
+                tar -czf chrome-arm64.tar.gz -C chrome-linux-arm64-tmp/chrome-linux .
                 chmod +x chrome-arm64.tar.gz
                 # Clean up
-                rm -rf chromium-arm64.zip chrome-linux
+                rm -rf chromium-arm64.zip chrome-linux-arm64-tmp
                 ls -lh ./chrome-arm64.tar.gz
             else
                 echo "✗ Failed to extract Chromium bundle for arm64!"
-                rm -rf chromium-arm64.zip chrome-linux
+                rm -rf chromium-arm64.zip chrome-linux-arm64-tmp
                 return 1
             fi
         else

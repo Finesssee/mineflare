@@ -106,75 +106,107 @@ if (shouldRunBuildServices) {
     console.log("✓ Using cached container services build");
 }
 
-const contentHash = hashDirectory(import.meta.dirname);
-console.log(`Directory content hash: ${contentHash}`);
-const tag = `${REPO}:${contentHash}`
+// Build configurations for different Paper versions
+const PAPER_VERSIONS = ['1.21.7', '1.21.8', '1.21.10'];
 
-// Check if image exists locally first; if not, try pulling from remote
-let imageExists = false;
-try {
-    console.log(`Checking if image ${tag} exists locally...`);
-    await $`docker image inspect ${tag}`.quiet();
-    imageExists = true;
-    console.log(`✓ Image ${tag} found locally, skipping build`);
-} catch (localError) {
-    if (localError.stderr?.includes("No such image") || localError.stderr?.includes("No such object") || localError.stderr?.toLowerCase?.().includes("not found")) {
-        console.log(`Image ${tag} not found locally. Attempting to pull from registry...`);
-        try {
-            await $`docker pull ${tag}`;
-            imageExists = true;
-            console.log(`✓ Pulled ${tag} from registry, skipping build`);
-        } catch (pullError) {
-            if (pullError.stderr?.includes("not found") || pullError.stderr?.includes("pull access denied")) {
-                console.log("Image not found in registry; will build it");
-            } else {
-                console.log(JSON.stringify(pullError.stderr, null, 2));
-                console.error("Unexpected error while pulling image:", pullError);
-            }
-        }
-    } else {
-        console.error("Unexpected error while checking local image:", localError);
-    }
-}
+// Function to build a specific Paper version
+async function buildPaperVersion(version: string) {
+    const contentHash = hashDirectory(import.meta.dirname);
+    const tag = `${REPO}:${version}-${contentHash}`;
+    const versionTag = `${REPO}:${version}`;
+    
+    console.log(`\n=== Building Paper ${version} ===`);
+    console.log(`Image: ${tag}`);
+    console.log(`Version tag: ${versionTag}`);
 
-// Only build and push if image doesn't exist
-if (!imageExists) {
-    console.log(`Building multi-arch image ${tag} for platforms: ${PLATFORMS}...`);
-    
-    // Build multi-arch image with buildx
-    // For multi-platform builds, we need either --push or an output type
-    // When skipping push, just validate the build without exporting
-    const outputFlag = skipPush ? "--output type=cacheonly" : "--push";
-    
-    // Check if we can use the cache by verifying if the image exists remotely
-    // This prevents build failures when the cache image doesn't exist
-    let cacheFromFlag = "";
+    // Check if image exists locally first; if not, try pulling from remote
+    let imageExists = false;
     try {
-        await $`docker manifest inspect ${tag}`.quiet();
-        cacheFromFlag = `--cache-from type=registry,ref=${tag}`;
-        console.log(`✓ Found cache image ${tag}, will use for build optimization`);
-    } catch (cacheError) {
-        console.log(`Cache image ${tag} not found, building without cache`);
+        console.log(`Checking if image ${tag} exists locally...`);
+        await $`docker image inspect ${tag}`.quiet();
+        imageExists = true;
+        console.log(`✓ Image ${tag} found locally, skipping build`);
+    } catch (localError) {
+        if (localError.stderr?.includes("No such image") || localError.stderr?.includes("No such object") || localError.stderr?.toLowerCase?.().includes("not found")) {
+            console.log(`Image ${tag} not found locally. Attempting to pull from registry...`);
+            try {
+                await $`docker pull ${tag}`;
+                imageExists = true;
+                console.log(`✓ Pulled ${tag} from registry, skipping build`);
+            } catch (pullError) {
+                if (pullError.stderr?.includes("not found") || pullError.stderr?.includes("pull access denied")) {
+                    console.log("Image not found in registry; will build it");
+                } else {
+                    console.log(JSON.stringify(pullError.stderr, null, 2));
+                    console.error("Unexpected error while pulling image:", pullError);
+                }
+            }
+        } else {
+            console.error("Unexpected error while checking local image:", localError);
+        }
+    }
+
+    // Only build and push if image doesn't exist
+    if (!imageExists) {
+        console.log(`Building multi-arch image ${tag} for platforms: ${PLATFORMS}...`);
+        
+        // Build multi-arch image with buildx
+        // For multi-platform builds, we need either --push or an output type
+        // When skipping push, just validate the build without exporting
+        
+        // Check if we can use the cache by verifying if the image exists remotely
+        // This prevents build failures when the cache image doesn't exist
+        let cacheFromFlag = "";
+        try {
+            await $`docker manifest inspect ${tag}`.quiet();
+            cacheFromFlag = `--cache-from type=registry,ref=${tag}`;
+            console.log(`✓ Found cache image ${tag}, will use for build optimization`);
+        } catch (cacheError) {
+            console.log(`Cache image ${tag} not found, building without cache`);
+        }
+        
+        // Build the image with or without cache based on availability
+        if (skipPush) {
+            await $`docker buildx build --platform ${PLATFORMS} ${cacheFromFlag} --build-arg PAPER_VERSION=${version} --progress=plain --output type=cacheonly -t ${tag} -t ${versionTag} .`
+                .catch((error) => {
+                    console.error(error)
+                    console.error(`Failed to build multi-arch image for Paper ${version}`)
+                    process.exit(1)
+                })
+        } else {
+            await $`docker buildx build --platform ${PLATFORMS} ${cacheFromFlag} --build-arg PAPER_VERSION=${version} --progress=plain --push -t ${tag} -t ${versionTag} .`
+                .catch((error) => {
+                    console.error(error)
+                    console.error(`Failed to build multi-arch image for Paper ${version}`)
+                    process.exit(1)
+                })
+        }
+        
+        if (skipPush) {
+            console.log(`✓ Successfully validated multi-arch build for ${tag} (${PLATFORMS})`);
+        } else {
+            console.log(`✓ Successfully built and pushed multi-arch ${tag} and ${versionTag} for ${PLATFORMS}`);
+        }
     }
     
-    // Build the image with or without cache based on availability
-    await $`docker buildx build --platform ${PLATFORMS} ${cacheFromFlag} --progress=plain ${outputFlag} -t ${tag} .`
-        .catch((error) => {
-            console.error(error)
-            console.error("Failed to build multi-arch image")
-            process.exit(1)
-        })
-    
-    if (skipPush) {
-        console.log(`✓ Successfully validated multi-arch build for ${tag} (${PLATFORMS})`);
-    } else {
-        console.log(`✓ Successfully built and pushed multi-arch ${tag} for ${PLATFORMS}`);
-    }
+    return tag;
 }
 
-// Write the repo name and tag to a file using Bun
-await Bun.write(".BASE_DOCKERFILE", tag);
-console.log(`✓ Successfully wrote tag to use in .BASE_DOCKERFILE`);
+// Build all Paper versions
+const builtTags: string[] = [];
+for (const version of PAPER_VERSIONS) {
+    const tag = await buildPaperVersion(version);
+    builtTags.push(tag);
+}
+
+// Write the default version (1.21.10) tag to .BASE_DOCKERFILE
+const defaultTag = builtTags.find(tag => tag.includes('1.21.10')) || builtTags[builtTags.length - 1];
+await Bun.write(".BASE_DOCKERFILE", defaultTag);
+console.log(`\n✓ Successfully wrote default tag to use in .BASE_DOCKERFILE: ${defaultTag}`);
+console.log(`\n✓ Built ${builtTags.length} Paper versions:`);
+for (const tag of builtTags) {
+    console.log(`  - ${tag}`);
+}
 
 // Calculate hash of directory contents
 function hashDirectory(dirPath: string): string {

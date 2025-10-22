@@ -900,6 +900,9 @@ write_status "Starting browser control server"
 start_browser_control &
 
 
+write_status "Starting browser control server"
+start_browser_control
+
 # Start the file server
 write_status "Starting file server"
 start_file_server

@@ -1,34 +1,26 @@
 # syntax=docker/dockerfile:1.6
 
 # Multi-stage build for Paper MC versions
-# Each stage downloads a specific version in parallel
+# Accept VERSION as build arg to support multiple versions with separate tags
 
-# Stage for Paper 1.21.7
-FROM itzg/minecraft-server:latest AS paper-1.21.7
-RUN mkdir -p /opt/minecraft/server/1.21.7 && /usr/bin/mc-image-helper install-paper \
-    --project=paper \
-    --version=1.21.7 \
-    --output-directory=/opt/minecraft/server/1.21.7 \
-    --results-file=/opt/minecraft/server/1.21.7/.paper-1.21.7.env
+ARG VERSION=1.21.10
+ARG PAPER_VERSION=${VERSION}
 
-# Stage for Paper 1.21.8
-FROM itzg/minecraft-server:latest AS paper-1.21.8
-RUN mkdir -p /opt/minecraft/server/1.21.8 && /usr/bin/mc-image-helper install-paper \
+# Stage for Paper installation
+FROM itzg/minecraft-server:latest AS paper-install
+ARG PAPER_VERSION
+RUN mkdir -p /opt/minecraft/server/${PAPER_VERSION} && /usr/bin/mc-image-helper install-paper \
     --project=paper \
-    --version=1.21.8 \
-    --output-directory=/opt/minecraft/server/1.21.8 \
-    --results-file=/opt/minecraft/server/1.21.8/.paper-1.21.8.env
-
-# Stage for Paper 1.21.10
-FROM itzg/minecraft-server:latest AS paper-1.21.10
-RUN mkdir -p /opt/minecraft/server/1.21.10 && /usr/bin/mc-image-helper install-paper \
-    --project=paper \
-    --version=1.21.10 \
-    --output-directory=/opt/minecraft/server/1.21.10 \
-    --results-file=/opt/minecraft/server/1.21.10/.paper-1.21.10.env
+    --version=${PAPER_VERSION} \
+    --output-directory=/opt/minecraft/server/${PAPER_VERSION} \
+    --results-file=/opt/minecraft/server/${PAPER_VERSION}/.paper-${PAPER_VERSION}.env
 
 # Final stage - main image
 FROM itzg/minecraft-server:latest
+
+# Declare build args for Paper version
+ARG VERSION=1.21.10
+ARG PAPER_VERSION=${VERSION}
 
 # First we do a bunch of heavy lifting to install the dependencies for paper plugin development
 # this is first to maximize build caching
@@ -41,15 +33,14 @@ RUN apt-get update \
         sudo \
         xvfb \
         x11vnc \
-        fluxbox \
         wget \
-        wmctrl \
         gnupg \
         python3 \
         x11-utils \
         xdotool \
         ripgrep \
     && curl -fsSL https://tailscale.com/install.sh | sh \
+    && curl -fsSL https://bun.sh/install | bash \
     && mkdir -p $(dirname "${TAILSCALE_STATE_DIR}") \
     && mkdir -p /data/plugins \
     && echo "minecraft ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/minecraft \
@@ -64,26 +55,24 @@ RUN wget -qO- https://github.com/novnc/websockify/archive/refs/tags/v0.11.0.tar.
 ENV TAILSCALE_STATE_DIR=/var/lib/tailscale/tailscaled.state
 ENV SERVER_PORT=8081
 ENV TYPE=PAPER
-# Match the VERSION here (for minecraft version) to the compatible version of Dynmap you downloaded
-ENV VERSION=1.21.10
-ENV PATH="/data/.local/bin:${PATH}"
+# VERSION is set via build arg and propagated to runtime
+ARG PAPER_VERSION
+ENV VERSION=${PAPER_VERSION}
+ENV PATH="/root/.bun/bin:/data/.local/bin:${PATH}"
 
 # Create directories for server jars and plugins outside /data
 RUN mkdir -p /opt/minecraft/server /opt/minecraft/plugins
 
-# Copy pre-downloaded Paper versions from build stages
-COPY --from=paper-1.21.8 /opt/minecraft/server/1.21.8 /opt/minecraft/server
-COPY --from=paper-1.21.10 /opt/minecraft/server/1.21.10 /opt/minecraft/server
-COPY --from=paper-1.21.7 /opt/minecraft/server/1.21.7 /opt/minecraft/server
+# Copy pre-downloaded Paper from build stage
+ARG PAPER_VERSION
+COPY --from=paper-install /opt/minecraft/server/${PAPER_VERSION} /opt/minecraft/server
 RUN ls -la /opt/minecraft/server && chown -R 1000:1000 /opt/minecraft
 
 COPY --chmod=755 start-with-services.sh /usr/local/bin/start-with-services.sh
 COPY --chmod=755 browser-control.py /usr/local/bin/browser-control.py
 COPY dynmap-configuration.txt /dynmap-configuration.txt
-# Copy version-specific plugins to /opt/minecraft/plugins (outside /data)
-COPY Dynmap-3.7-beta-11-spigot-1.21.10.jar /opt/minecraft/plugins/
-COPY Dynmap-3.7-beta-11-spigot-1.21.7.jar /opt/minecraft/plugins/
-COPY Dynmap-3.7-beta-11-spigot-1.21.8.jar /opt/minecraft/plugins/
+# Copy all available Dynmap jars, symlink will be set up by start script
+COPY Dynmap-3.7-beta-11-spigot-*.jar /opt/minecraft/plugins/
 
 # Copy all binaries to a temporary location. We will select the correct one for the
 # target architecture in the next step.
@@ -97,12 +86,16 @@ COPY --chmod=755 \
     gemini-x64 gemini-arm64 \
     /tmp/
 
+# Copy all Chrome binaries to a temporary location. We will select the correct one for the
+# target architecture in the next step.
+# Declare TARGETARCH early so we can use it in conditional statements
+ARG TARGETARCH
+
 COPY chrome-x64.tar.gz chrome-arm64.tar.gz /tmp/
 
 # Select the correct binaries for the target architecture, move them to /usr/local/bin,
 # and then clean up the temporary files. This is done in a single RUN command to
 # ensure the unused binaries are not left in an intermediate layer.
-ARG TARGETARCH
 RUN set -eux; \
     arch_suffix=''; \
     case "$TARGETARCH" in \
