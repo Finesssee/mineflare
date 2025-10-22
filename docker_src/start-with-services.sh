@@ -16,7 +16,7 @@ set -euo pipefail
 # 8082  - Log tail (hteetp HTTP server)
 # 8083  - File server + backup API
 # 8084  - HTTP proxy control channel
-# 8085-8109 - HTTP proxy data channels (25 channels for R2)
+# 8085-8100 - HTTP proxy data channels (16 channels for R2)
 #
 # === AI Terminals (ttyd) ===
 # 7681  - Claude terminal
@@ -225,13 +225,13 @@ configure_dynmap() {
 
 
 start_http_proxy() {
-  # PORTS: 8084 (control), 8085-8109 (data channels - 25 channels)
+  # PORTS: 8084 (control), 8085-8100 (data channels - 16 channels)
   # Provides S3-compatible HTTP interface to R2 buckets
   echo "Starting HTTP proxy server..."
   local PROXY_BINARY="/usr/local/bin/http-proxy"
   local CONTROL_PORT=8084
   local DATA_PORT_START=8085
-  local DATA_PORT_END=8109
+  local DATA_PORT_END=8100
   
   if [ ! -x "$PROXY_BINARY" ]; then
     echo "Warning: HTTP proxy binary not found or not executable, skipping..."

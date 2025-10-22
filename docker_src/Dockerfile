@@ -139,7 +139,7 @@ RUN mkdir -p /run/tailscale \
 # 8082 - Log tail (hteetp)
 # 8083 - File server + backup API
 # 8084 - HTTP proxy control channel
-# 8085-8109 - HTTP proxy data channels (25 channels for R2 access)
+# 8085-8100 - HTTP proxy data channels (16 channels for R2 access)
 #
 # === AI Terminals (ttyd) ===
 # 7681 - Claude terminal
