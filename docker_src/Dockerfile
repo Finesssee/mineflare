@@ -39,6 +39,14 @@ RUN apt-get update \
         curl \
         ca-certificates \
         sudo \
+        xvfb \
+        x11vnc \
+        fluxbox \
+        wget \
+        wmctrl \
+        gnupg \
+        python3 \
+        x11-utils \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && mkdir -p $(dirname "${TAILSCALE_STATE_DIR}") \
     && mkdir -p /data/plugins \
@@ -46,6 +54,15 @@ RUN apt-get update \
     && chmod 0440 /etc/sudoers.d/minecraft \
     && bash /tmp/setup-paper-dev.sh \
     && rm -rf /var/lib/apt/lists/*
+
+# Install noVNC
+RUN wget -qO- https://github.com/novnc/noVNC/archive/refs/tags/v1.4.0.tar.gz | tar xz -C /opt \
+    && mv /opt/noVNC-1.4.0 /opt/novnc \
+    && ln -s /opt/novnc/vnc.html /opt/novnc/index.html
+
+# Install websockify (required by noVNC)
+RUN wget -qO- https://github.com/novnc/websockify/archive/refs/tags/v0.11.0.tar.gz | tar xz -C /opt \
+    && mv /opt/websockify-0.11.0 /opt/websockify
 
 ENV TAILSCALE_STATE_DIR=/var/lib/tailscale/tailscaled.state
 ENV SERVER_PORT=8081
@@ -70,26 +87,59 @@ COPY Dynmap-3.7-beta-11-spigot-1.21.10.jar /opt/minecraft/plugins/
 COPY Dynmap-3.7-beta-11-spigot-1.21.7.jar /opt/minecraft/plugins/
 COPY Dynmap-3.7-beta-11-spigot-1.21.8.jar /opt/minecraft/plugins/
 
-COPY --chmod=755 http-proxy-x64 /usr/local/bin/http-proxy-x64
-COPY --chmod=755 http-proxy-arm64 /usr/local/bin/http-proxy-arm64
-COPY --chmod=755 file-server-x64 /usr/local/bin/file-server-x64
-COPY --chmod=755 file-server-arm64 /usr/local/bin/file-server-arm64
-COPY --chmod=755 hteetp-linux-x64 /usr/local/bin/hteetp-linux-x64
-COPY --chmod=755 hteetp-linux-arm64 /usr/local/bin/hteetp-linux-arm64
-COPY --chmod=755 ttyd-x64 /usr/local/bin/ttyd-x64
-COPY --chmod=755 ttyd-arm64 /usr/local/bin/ttyd-arm64
-COPY --chmod=755 claude-x64 /usr/local/bin/claude-x64
-COPY --chmod=755 claude-arm64 /usr/local/bin/claude-arm64
-COPY --chmod=755 codex-x64 /usr/local/bin/codex-x64
-COPY --chmod=755 codex-arm64 /usr/local/bin/codex-arm64
-COPY --chmod=755 gemini-x64 /usr/local/bin/gemini-x64
-COPY --chmod=755 gemini-arm64 /usr/local/bin/gemini-arm64
+# Copy all binaries to a temporary location. We will select the correct one for the
+# target architecture in the next step.
+COPY --chmod=755 \
+    http-proxy-x64 http-proxy-arm64 \
+    file-server-x64 file-server-arm64 \
+    hteetp-linux-x64 hteetp-linux-arm64 \
+    ttyd-x64 ttyd-arm64 \
+    claude-x64 claude-arm64 \
+    codex-x64 codex-arm64 \
+    gemini-x64 gemini-arm64 \
+    chrome-x64 chrome-arm64 \
+    /tmp/
+
+# Select the correct binaries for the target architecture, move them to /usr/local/bin,
+# and then clean up the temporary files. This is done in a single RUN command to
+# ensure the unused binaries are not left in an intermediate layer.
+ARG TARGETARCH
+RUN set -eux; \
+    arch_suffix=''; \
+    case "$TARGETARCH" in \
+        "amd64") arch_suffix='x64' ;; \
+        "arm64") arch_suffix='arm64' ;; \
+        *) echo "Unsupported architecture: $TARGETARCH"; exit 1 ;; \
+    esac; \
+    mv "/tmp/http-proxy-$arch_suffix" /usr/local/bin/http-proxy; \
+    mv "/tmp/file-server-$arch_suffix" /usr/local/bin/file-server; \
+    mv "/tmp/hteetp-linux-$arch_suffix" /usr/local/bin/hteetp; \
+    mv "/tmp/ttyd-$arch_suffix" /usr/local/bin/ttyd; \
+    mv "/tmp/claude-$arch_suffix" /usr/local/bin/claude; \
+    mv "/tmp/codex-$arch_suffix" /usr/local/bin/codex; \
+    mv "/tmp/gemini-$arch_suffix" /usr/local/bin/gemini; \
+    mv "/tmp/chrome-$arch_suffix" /usr/local/bin/chrome; \
+    rm -rf /tmp/*
+
 COPY CLAUDE.md /data/CLAUDE.md
 RUN mkdir -p /run/tailscale \
     && mkdir -p /data/plugins/spark \
     && echo '{"_header":"spark configuration file - https://spark.lucko.me/docs/Configuration","backgroundProfiler":false}' > /data/plugins/spark/config.json \
     && chown -R 1000:1000 /data \
     && chown -R 1000:1000 /run/tailscale
+
+# Expose ports:
+# 8080 - Health checks
+# 8081 - Minecraft game traffic
+# 8082 - Log tail
+# 8083 - File server
+# 8084 - HTTP proxy control
+# 8085-8109 - HTTP proxy data channels
+# 25575 - RCON
+# 7681-7684 - ttyd terminals
+# 5900 - VNC server
+# 6080 - noVNC web client
+EXPOSE 5900 6080
 
 ENTRYPOINT ["/usr/local/bin/start-with-services.sh"]
 CMD ["/image/scripts/start"]

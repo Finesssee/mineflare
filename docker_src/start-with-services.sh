@@ -197,63 +197,10 @@ configure_dynmap() {
 
 start_http_proxy() {
   echo "Starting HTTP proxy server..."
+  local PROXY_BINARY="/usr/local/bin/http-proxy"
   
-  # Detect architecture
-  ARCH=$(uname -m)
-  echo "Detected architecture: $ARCH"
-  
-  # Determine the order to try binaries based on architecture
-  if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
-    # x86_64 system - try x64 first, then arm64
-    BINARIES=("/usr/local/bin/http-proxy-x64" "/usr/local/bin/http-proxy-arm64")
-    NAMES=("x64" "arm64")
-  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    # ARM64 system - try arm64 first, then x64
-    BINARIES=("/usr/local/bin/http-proxy-arm64" "/usr/local/bin/http-proxy-x64")
-    NAMES=("arm64" "x64")
-  else
-    # Unknown architecture - try both starting with x64
-    echo "Warning: Unknown architecture $ARCH"
-    BINARIES=("/usr/local/bin/http-proxy-x64" "/usr/local/bin/http-proxy-arm64")
-    NAMES=("x64" "arm64")
-  fi
-  
-  PROXY_BINARY=""
-  
-  # Try each binary in order
-  for i in 0 1; do
-    BINARY="${BINARIES[$i]}"
-    NAME="${NAMES[$i]}"
-    
-    if [ ! -x "$BINARY" ]; then
-      echo "Binary $NAME not found or not executable"
-      continue
-    fi
-    
-    echo "Testing $NAME binary..."
-    
-    # Try to execute and check for errors
-    # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
-    if timeout 2 "$BINARY" --help >/dev/null 2>&1; then
-      echo "✓ $NAME binary is compatible"
-      PROXY_BINARY="$BINARY"
-      break
-    else
-      EXIT_CODE=$?
-      if [ $EXIT_CODE -eq 126 ] || [ $EXIT_CODE -eq 133 ]; then
-        echo "✗ $NAME binary: Architecture mismatch (exit code $EXIT_CODE)"
-      elif [ $EXIT_CODE -eq 124 ]; then
-        echo "✓ $NAME binary timed out but seems to work (this is OK)"
-        PROXY_BINARY="$BINARY"
-        break
-      else
-        echo "✗ $NAME binary failed with exit code $EXIT_CODE"
-      fi
-    fi
-  done
-  
-  if [ -z "$PROXY_BINARY" ]; then
-    echo "Warning: No compatible HTTP proxy binary found, skipping..."
+  if [ ! -x "$PROXY_BINARY" ]; then
+    echo "Warning: HTTP proxy binary not found or not executable, skipping..."
     return
   fi
   
@@ -263,7 +210,7 @@ start_http_proxy() {
   (
     while true; do
       echo "Starting HTTP proxy (attempt at $(date))"
-      $PROXY_BINARY || echo "HTTP proxy crashed (exit code: $?), restarting in 2 seconds..."
+      "$PROXY_BINARY" || echo "HTTP proxy crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/http-proxy.log 2>&1 &
@@ -274,273 +221,49 @@ start_http_proxy() {
 
 setup_hteetp() {
   echo "Setting up hteetp binary..."
-  
-  # Detect architecture
-  ARCH=$(uname -m)
-  echo "Detected architecture: $ARCH"
-  
-  # Determine the order to try binaries based on architecture
-  if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
-    # x86_64 system - try x64 first, then arm64
-    BINARIES=("/usr/local/bin/hteetp-linux-x64" "/usr/local/bin/hteetp-linux-arm64")
-    NAMES=("x64" "arm64")
-  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    # ARM64 system - try arm64 first, then x64
-    BINARIES=("/usr/local/bin/hteetp-linux-arm64" "/usr/local/bin/hteetp-linux-x64")
-    NAMES=("arm64" "x64")
-  else
-    # Unknown architecture - try both starting with x64
-    echo "Warning: Unknown architecture $ARCH"
-    BINARIES=("/usr/local/bin/hteetp-linux-x64" "/usr/local/bin/hteetp-linux-arm64")
-    NAMES=("x64" "arm64")
-  fi
-  
-  HTEETP_BINARY=""
-  
-  # Try each binary in order
-  for i in 0 1; do
-    BINARY="${BINARIES[$i]}"
-    NAME="${NAMES[$i]}"
-    
-    if [ ! -x "$BINARY" ]; then
-      echo "Binary $NAME not found or not executable"
-      continue
-    fi
-    
-    echo "Testing $NAME binary..."
-    
-    # Try to execute and check for errors
-    # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
-    if timeout 2 "$BINARY" --help >/dev/null 2>&1; then
-      echo "✓ $NAME binary is compatible"
-      HTEETP_BINARY="$BINARY"
-      break
-    else
-      EXIT_CODE=$?
-      if [ $EXIT_CODE -eq 126 ] || [ $EXIT_CODE -eq 133 ]; then
-        echo "✗ $NAME binary: Architecture mismatch (exit code $EXIT_CODE)"
-      elif [ $EXIT_CODE -eq 124 ]; then
-        echo "✓ $NAME binary timed out but seems to work (this is OK)"
-        HTEETP_BINARY="$BINARY"
-        break
-      else
-        echo "✗ $NAME binary failed with exit code $EXIT_CODE"
-      fi
-    fi
-  done
-  
-  if [ -z "$HTEETP_BINARY" ]; then
-    echo "Error: No compatible hteetp binary found!"
+  local HTEETP_BINARY="/usr/local/bin/hteetp"
+
+  if [ ! -x "$HTEETP_BINARY" ]; then
+    echo "Error: hteetp binary not found or not executable!"
     return 1
   fi
   
-  echo "Using hteetp binary: $HTEETP_BINARY"
-  
-  # Create symlink in /tmp (writable by user 1000)
-  sudo ln -sf "$HTEETP_BINARY" /usr/local/bin/hteetp
-  
-  echo "hteetp symlink created successfully"
+  echo "hteetp binary is ready at $HTEETP_BINARY"
+  return 0
 }
 
 setup_codex() {
   echo "Setting up codex binary..."
-  
-  # Detect architecture
-  ARCH=$(uname -m)
-  echo "Detected architecture: $ARCH"
-  
-  # Determine the order to try binaries based on architecture
-  if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
-    # x86_64 system - try x64 first, then arm64
-    BINARIES=("/usr/local/bin/codex-x64" "/usr/local/bin/codex-arm64")
-    NAMES=("x64" "arm64")
-  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    # ARM64 system - try arm64 first, then x64
-    BINARIES=("/usr/local/bin/codex-arm64" "/usr/local/bin/codex-x64")
-    NAMES=("arm64" "x64")
-  else
-    # Unknown architecture - try both starting with x64
-    echo "Warning: Unknown architecture $ARCH"
-    BINARIES=("/usr/local/bin/codex-x64" "/usr/local/bin/codex-arm64")
-    NAMES=("x64" "arm64")
-  fi
-  
-  CODEX_BINARY=""
-  
-  # Try each binary in order
-  for i in 0 1; do
-    BINARY="${BINARIES[$i]}"
-    NAME="${NAMES[$i]}"
-    
-    if [ ! -x "$BINARY" ]; then
-      echo "Binary $NAME not found or not executable"
-      continue
-    fi
-    
-    echo "Testing $NAME binary..."
-    
-    # Try to execute and check for errors
-    # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
-    if timeout 2 "$BINARY" --version >/dev/null 2>&1; then
-      echo "✓ $NAME binary is compatible"
-      CODEX_BINARY="$BINARY"
-      break
-    else
-      EXIT_CODE=$?
-      if [ $EXIT_CODE -eq 126 ] || [ $EXIT_CODE -eq 133 ]; then
-        echo "✗ $NAME binary: Architecture mismatch (exit code $EXIT_CODE)"
-      elif [ $EXIT_CODE -eq 124 ]; then
-        echo "✓ $NAME binary timed out but seems to work (this is OK)"
-        CODEX_BINARY="$BINARY"
-        break
-      else
-        echo "✗ $NAME binary failed with exit code $EXIT_CODE"
-      fi
-    fi
-  done
-  
-  if [ -z "$CODEX_BINARY" ]; then
-    echo "Error: No compatible codex binary found!"
+  local CODEX_BINARY="/usr/local/bin/codex"
+
+  if [ ! -x "$CODEX_BINARY" ]; then
+    echo "Error: codex binary not found or not executable!"
     return 1
   fi
-  
-  echo "Using codex binary: $CODEX_BINARY"
-  
-  # Create symlink
-  sudo ln -sf "$CODEX_BINARY" /usr/local/bin/codex
-  
-  echo "codex symlink created successfully"
+
+  echo "codex binary is ready at $CODEX_BINARY"
+  return 0
 }
 
 setup_gemini() {
   echo "Setting up gemini binary..."
-  
-  # Detect architecture
-  ARCH=$(uname -m)
-  echo "Detected architecture: $ARCH"
-  
-  # Determine the order to try binaries based on architecture
-  if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
-    # x86_64 system - try x64 first, then arm64
-    BINARIES=("/usr/local/bin/gemini-x64" "/usr/local/bin/gemini-arm64")
-    NAMES=("x64" "arm64")
-  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    # ARM64 system - try arm64 first, then x64
-    BINARIES=("/usr/local/bin/gemini-arm64" "/usr/local/bin/gemini-x64")
-    NAMES=("arm64" "x64")
-  else
-    # Unknown architecture - try both starting with x64
-    echo "Warning: Unknown architecture $ARCH"
-    BINARIES=("/usr/local/bin/gemini-x64" "/usr/local/bin/gemini-arm64")
-    NAMES=("x64" "arm64")
-  fi
-  
-  GEMINI_BINARY=""
-  
-  # Try each binary in order
-  for i in 0 1; do
-    BINARY="${BINARIES[$i]}"
-    NAME="${NAMES[$i]}"
-    
-    if [ ! -x "$BINARY" ]; then
-      echo "Binary $NAME not found or not executable"
-      continue
-    fi
-    
-    echo "Testing $NAME binary..."
-    
-    # Try to execute and check for errors
-    # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
-    if timeout 2 "$BINARY" --version >/dev/null 2>&1; then
-      echo "✓ $NAME binary is compatible"
-      GEMINI_BINARY="$BINARY"
-      break
-    else
-      EXIT_CODE=$?
-      if [ $EXIT_CODE -eq 126 ] || [ $EXIT_CODE -eq 133 ]; then
-        echo "✗ $NAME binary: Architecture mismatch (exit code $EXIT_CODE)"
-      elif [ $EXIT_CODE -eq 124 ]; then
-        echo "✓ $NAME binary timed out but seems to work (this is OK)"
-        GEMINI_BINARY="$BINARY"
-        break
-      else
-        echo "✗ $NAME binary failed with exit code $EXIT_CODE"
-      fi
-    fi
-  done
-  
-  if [ -z "$GEMINI_BINARY" ]; then
-    echo "Error: No compatible gemini binary found!"
+  local GEMINI_BINARY="/usr/local/bin/gemini"
+
+  if [ ! -x "$GEMINI_BINARY" ]; then
+    echo "Error: gemini binary not found or not executable!"
     return 1
   fi
-  
-  echo "Using gemini binary: $GEMINI_BINARY"
-  
-  # Create symlink
-  sudo ln -sf "$GEMINI_BINARY" /usr/local/bin/gemini
-  
-  echo "gemini symlink created successfully"
+
+  echo "gemini binary is ready at $GEMINI_BINARY"
+  return 0
 }
 
 start_file_server() {
   echo "Starting file server on port 8083..."
+  local FILE_SERVER_BINARY="/usr/local/bin/file-server"
 
-  # Detect architecture
-  ARCH=$(uname -m)
-  echo "Detected architecture: $ARCH"
-
-  # Determine the order to try binaries based on architecture
-  if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
-    # x86_64 system - try x64 first, then arm64
-    BINARIES=("/usr/local/bin/file-server-x64" "/usr/local/bin/file-server-arm64")
-    NAMES=("x64" "arm64")
-  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    # ARM64 system - try arm64 first, then x64
-    BINARIES=("/usr/local/bin/file-server-arm64" "/usr/local/bin/file-server-x64")
-    NAMES=("arm64" "x64")
-  else
-    # Unknown architecture - try both starting with x64
-    echo "Warning: Unknown architecture $ARCH"
-    BINARIES=("/usr/local/bin/file-server-x64" "/usr/local/bin/file-server-arm64")
-    NAMES=("x64" "arm64")
-  fi
-
-  FILE_SERVER_BINARY=""
-
-  # Try each binary in order
-  for i in 0 1; do
-    BINARY="${BINARIES[$i]}"
-    NAME="${NAMES[$i]}"
-
-    if [ ! -x "$BINARY" ]; then
-      echo "Binary $NAME not found or not executable"
-      continue
-    fi
-
-    echo "Testing $NAME binary..."
-
-    # Try to execute and check for errors
-    # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
-    if timeout 2 "$BINARY" --help >/dev/null 2>&1; then
-      echo "✓ $NAME binary is compatible"
-      FILE_SERVER_BINARY="$BINARY"
-      break
-    else
-      EXIT_CODE=$?
-      if [ $EXIT_CODE -eq 126 ] || [ $EXIT_CODE -eq 133 ]; then
-        echo "✗ $NAME binary: Architecture mismatch (exit code $EXIT_CODE)"
-      elif [ $EXIT_CODE -eq 124 ]; then
-        echo "✓ $NAME binary timed out but seems to work (this is OK)"
-        FILE_SERVER_BINARY="$BINARY"
-        break
-      else
-        echo "✗ $NAME binary failed with exit code $EXIT_CODE"
-      fi
-    fi
-  done
-
-  if [ -z "$FILE_SERVER_BINARY" ]; then
-    echo "Warning: No compatible file server binary found, skipping..."
+  if [ ! -x "$FILE_SERVER_BINARY" ]; then
+    echo "Warning: File server binary not found or not executable, skipping..."
     return
   fi
 
@@ -550,7 +273,7 @@ start_file_server() {
   (
     while true; do
       echo "Starting file server (attempt at $(date))"
-      $FILE_SERVER_BINARY || echo "File server crashed (exit code: $?), restarting in 2 seconds..."
+      "$FILE_SERVER_BINARY" || echo "File server crashed (exit code: $?), restarting in 2 seconds..."
       sleep 2
     done
   ) >> /logs/file-server.log 2>&1 &
@@ -559,64 +282,124 @@ start_file_server() {
   echo "File server started in background (PID: $FILE_SERVER_PID), logging to /logs/file-server.log"
 }
 
+start_xvfb() {
+  echo "Starting Xvfb (virtual display)..."
+  
+  (
+    while true; do
+      echo "Starting Xvfb (attempt at $(date))"
+      /usr/bin/Xvfb :99 -screen 0 1280x720x24 || echo "Xvfb crashed (exit code: $?), restarting in 2 seconds..."
+      sleep 2
+    done
+  ) >> /logs/xvfb.log 2>&1 &
+  XVFB_PID=$!
+  
+  echo "Xvfb started in background (PID: $XVFB_PID), logging to /logs/xvfb.log"
+  
+  # Wait for Xvfb to be ready
+  for i in $(seq 1 20); do
+    if xdpyinfo -display :99 >/dev/null 2>&1; then
+      echo "Xvfb is ready"
+      break
+    fi
+    sleep 0.5
+  done
+}
+
+start_fluxbox() {
+  echo "Starting Fluxbox (window manager)..."
+  
+  (
+    while true; do
+      echo "Starting Fluxbox (attempt at $(date))"
+      DISPLAY=:99 /usr/bin/fluxbox || echo "Fluxbox crashed (exit code: $?), restarting in 2 seconds..."
+      sleep 2
+    done
+  ) >> /logs/fluxbox.log 2>&1 &
+  FLUXBOX_PID=$!
+  
+  echo "Fluxbox started in background (PID: $FLUXBOX_PID), logging to /logs/fluxbox.log"
+  sleep 1  # Give fluxbox a moment to initialize
+}
+
+start_x11vnc() {
+  echo "Starting x11vnc (VNC server)..."
+  
+  (
+    while true; do
+      echo "Starting x11vnc (attempt at $(date))"
+      DISPLAY=:99 /usr/bin/x11vnc -forever -shared -rfbport 5900 -nopw || echo "x11vnc crashed (exit code: $?), restarting in 2 seconds..."
+      sleep 2
+    done
+  ) >> /logs/x11vnc.log 2>&1 &
+  X11VNC_PID=$!
+  
+  echo "x11vnc started in background (PID: $X11VNC_PID), logging to /logs/x11vnc.log"
+  
+  # Wait for x11vnc to be ready
+  for i in $(seq 1 20); do
+    if netstat -ln | grep -q ":5900 "; then
+      echo "x11vnc is ready"
+      break
+    fi
+    sleep 0.5
+  done
+}
+
+start_novnc() {
+  echo "Starting noVNC (web-based VNC client)..."
+  
+  (
+    while true; do
+      echo "Starting noVNC (attempt at $(date))"
+      /usr/bin/python3 /opt/websockify/run --web /opt/novnc 6080 localhost:5900 || echo "noVNC crashed (exit code: $?), restarting in 2 seconds..."
+      sleep 2
+    done
+  ) >> /logs/novnc.log 2>&1 &
+  NOVNC_PID=$!
+  
+  echo "noVNC started in background (PID: $NOVNC_PID), logging to /logs/novnc.log"
+  echo "noVNC will be accessible at http://localhost:6080/vnc.html"
+}
+
+start_chrome() {
+  echo "Starting Chrome browser in virtual display..."
+  local CHROME_BINARY="/usr/local/bin/chrome"
+  
+  if [ ! -x "$CHROME_BINARY" ]; then
+    echo "Warning: Chrome binary not found or not executable, skipping..."
+    return
+  fi
+  
+  echo "Using Chrome binary: $CHROME_BINARY"
+  
+  # Create chrome profile directory
+  mkdir -p /tmp/chrome-profile
+  sudo chown -R 1000:1000 /tmp/chrome-profile
+  
+  (
+    while true; do
+      echo "Starting Chrome (attempt at $(date))"
+      DISPLAY=:99 "$CHROME_BINARY" \
+        --no-sandbox \
+        --disable-dev-shm-usage \
+        --disable-gpu \
+        --user-data-dir=/tmp/chrome-profile \
+        --new-window \
+        about:blank || echo "Chrome crashed (exit code: $?), restarting in 2 seconds..."
+      sleep 2
+    done
+  ) >> /logs/chrome.log 2>&1 &
+  CHROME_PID=$!
+  
+  echo "Chrome started in background (PID: $CHROME_PID), logging to /logs/chrome.log"
+}
+
 start_ttyd() {
   echo "Starting web terminals (ttyd) for Claude, Codex, and Gemini..."
+  local TTYD_BINARY="/usr/local/bin/ttyd"
 
-  # Detect architecture
-  ARCH=$(uname -m)
-  echo "Detected architecture: $ARCH"
-
-  # Determine the order to try binaries based on architecture
-  if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
-    # x86_64 system - try x64 first, then arm64
-    BINARIES=("/usr/local/bin/ttyd-x64" "/usr/local/bin/ttyd-arm64")
-    NAMES=("x64" "arm64")
-  elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    # ARM64 system - try arm64 first, then x64
-    BINARIES=("/usr/local/bin/ttyd-arm64" "/usr/local/bin/ttyd-x64")
-    NAMES=("arm64" "x64")
-  else
-    # Unknown architecture - try both starting with x64
-    echo "Warning: Unknown architecture $ARCH"
-    BINARIES=("/usr/local/bin/ttyd-x64" "/usr/local/bin/ttyd-arm64")
-    NAMES=("x64" "arm64")
-  fi
-
-  TTYD_BINARY=""
-
-  # Try each binary in order
-  for i in 0 1; do
-    BINARY="${BINARIES[$i]}"
-    NAME="${NAMES[$i]}"
-
-    if [ ! -x "$BINARY" ]; then
-      echo "Binary $NAME not found or not executable"
-      continue
-    fi
-
-    echo "Testing $NAME binary..."
-
-    # Try to execute and check for errors
-    # Exit codes: 126 = cannot execute, 133 = Rosetta/emulation failure
-    if timeout 2 "$BINARY" --help >/dev/null 2>&1; then
-      echo "✓ $NAME binary is compatible"
-      TTYD_BINARY="$BINARY"
-      break
-    else
-      EXIT_CODE=$?
-      if [ $EXIT_CODE -eq 126 ] || [ $EXIT_CODE -eq 133 ]; then
-        echo "✗ $NAME binary: Architecture mismatch (exit code $EXIT_CODE)"
-      elif [ $EXIT_CODE -eq 124 ]; then
-        echo "✓ $NAME binary timed out but seems to work (this is OK)"
-        TTYD_BINARY="$BINARY"
-        break
-      else
-        echo "✗ $NAME binary failed with exit code $EXIT_CODE"
-      fi
-    fi
-  done
-
-  if [ -z "$TTYD_BINARY" ]; then
+  if [ ! -z "$TTYD_BINARY" ]; then
     echo "Warning: No compatible ttyd binary found, skipping..."
     return
   fi
@@ -630,7 +413,7 @@ start_ttyd() {
   (
     while true; do
       echo "Starting ttyd for Claude with shared PTY mode (attempt at $(date))"
-      $TTYD_BINARY \
+      "$TTYD_BINARY" \
         --port 7681 \
         --interface 0.0.0.0 \
         --base-path /src/terminal/claude \
@@ -651,7 +434,7 @@ start_ttyd() {
   (
     while true; do
       echo "Starting ttyd for Codex with shared PTY mode (attempt at $(date))"
-      $TTYD_BINARY \
+      "$TTYD_BINARY" \
         --port 7682 \
         --interface 0.0.0.0 \
         --base-path /src/terminal/codex \
@@ -672,7 +455,7 @@ start_ttyd() {
   (
     while true; do
       echo "Starting ttyd for Gemini with shared PTY mode (attempt at $(date))"
-      $TTYD_BINARY \
+      "$TTYD_BINARY" \
         --port 7683 \
         --interface 0.0.0.0 \
         --base-path /src/terminal/gemini \
@@ -688,6 +471,27 @@ start_ttyd() {
   ) >> /logs/ttyd-gemini.log 2>&1 &
   TTYD_GEMINI_PID=$!
   echo "ttyd (Gemini) started on port 7683 with shared PTY mode (PID: $TTYD_GEMINI_PID)"
+
+  # Run ttyd for Bash (port 7684) with shared PTY mode
+  (
+    while true; do
+      echo "Starting ttyd for Bash with shared PTY mode (attempt at $(date))"
+      "$TTYD_BINARY" \
+        --port 7684 \
+        --interface 0.0.0.0 \
+        --base-path /src/terminal/bash \
+        -Q \
+        --session-width 160 \
+        --session-height 80 \
+        --writable \
+        --client-option fontSize=14 \
+        --client-option "theme=$TTYD_THEME" \
+        bash || echo "ttyd (Bash) crashed (exit code: $?), restarting in 2 seconds..."
+      sleep 2
+    done
+  ) >> /logs/ttyd-bash.log 2>&1 &
+  TTYD_BASH_PID=$!
+  echo "ttyd (Bash) started on port 7684 with shared PTY mode (PID: $TTYD_BASH_PID)"
 
   echo "All ttyd terminals started successfully with shared PTY mode"
 }
@@ -755,6 +559,37 @@ kill_background_processes() {
     # Kill the entire process group
     pkill -KILL -P "$HTTP_PROXY_PID" 2>/dev/null || true
     kill -KILL "$HTTP_PROXY_PID" 2>/dev/null || true
+  fi
+
+  # Kill VNC/Browser processes and their children
+  if [ -n "${CHROME_PID:-}" ]; then
+    echo "Killing Chrome (PID: $CHROME_PID) and its children..."
+    pkill -KILL -P "$CHROME_PID" 2>/dev/null || true
+    kill -KILL "$CHROME_PID" 2>/dev/null || true
+  fi
+  
+  if [ -n "${NOVNC_PID:-}" ]; then
+    echo "Killing noVNC (PID: $NOVNC_PID) and its children..."
+    pkill -KILL -P "$NOVNC_PID" 2>/dev/null || true
+    kill -KILL "$NOVNC_PID" 2>/dev/null || true
+  fi
+  
+  if [ -n "${X11VNC_PID:-}" ]; then
+    echo "Killing x11vnc (PID: $X11VNC_PID) and its children..."
+    pkill -KILL -P "$X11VNC_PID" 2>/dev/null || true
+    kill -KILL "$X11VNC_PID" 2>/dev/null || true
+  fi
+  
+  if [ -n "${FLUXBOX_PID:-}" ]; then
+    echo "Killing Fluxbox (PID: $FLUXBOX_PID) and its children..."
+    pkill -KILL -P "$FLUXBOX_PID" 2>/dev/null || true
+    kill -KILL "$FLUXBOX_PID" 2>/dev/null || true
+  fi
+  
+  if [ -n "${XVFB_PID:-}" ]; then
+    echo "Killing Xvfb (PID: $XVFB_PID) and its children..."
+    pkill -KILL -P "$XVFB_PID" 2>/dev/null || true
+    kill -KILL "$XVFB_PID" 2>/dev/null || true
   fi
 
   echo "Background processes terminated"
@@ -968,11 +803,28 @@ restore_from_backup() {
 }
 
 
-printenv
+
 
 write_status "Initializing services"
 
 echo "Starting services..."
+
+
+# Start VNC services for embedded browser
+write_status "Starting virtual display (Xvfb)"
+start_xvfb
+
+write_status "Starting window manager (Fluxbox)"
+start_fluxbox
+
+write_status "Starting VNC server (x11vnc)"
+start_x11vnc
+
+write_status "Starting web VNC client (noVNC)"
+start_novnc
+
+write_status "Starting Chrome browser"
+start_chrome
 
 # Start the file server
 write_status "Starting file server"
