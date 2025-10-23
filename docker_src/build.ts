@@ -192,12 +192,11 @@ async function buildPaperVersion(version: string) {
     return tag;
 }
 
-// Build all Paper versions
-const builtTags: string[] = [];
-for (const version of PAPER_VERSIONS) {
-    const tag = await buildPaperVersion(version);
-    builtTags.push(tag);
-}
+// Build all Paper versions in parallel
+console.log(`\n=== Building ${PAPER_VERSIONS.length} Paper versions in parallel ===`);
+const builtTags = await Promise.all(
+    PAPER_VERSIONS.map(version => buildPaperVersion(version))
+);
 
 // Write the default version (1.21.10) tag to .BASE_DOCKERFILE
 const defaultTag = builtTags.find(tag => tag.includes('1.21.10')) || builtTags[builtTags.length - 1];
