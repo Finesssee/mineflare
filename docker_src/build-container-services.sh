@@ -13,7 +13,18 @@ fi
 
 # Create a temporary directory for logs
 LOG_DIR=$(mktemp -d)
-trap "rm -rf $LOG_DIR" EXIT
+# Ensure only the main shell cleans up the temp log directory (avoid subshells removing it)
+MAIN_PID=$$
+trap '[ "$$" = '"$MAIN_PID"' ] && rm -rf '"$LOG_DIR"'' EXIT
+
+# Portable SHA256 helper (supports macOS without sha256sum)
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
 
 # Function to build http-proxy binaries
 build_http_proxy() {
@@ -46,12 +57,11 @@ build_http_proxy() {
         echo "✓ HTTP Proxy build completed successfully"
     } &> "$log_file"
     
-    if [ $? -ne 0 ]; then
+    local status=$?
+    if [ -f "$log_file" ]; then
         cat "$log_file"
-        return 1
     fi
-    cat "$log_file"
-    return 0
+    return $status
 }
 
 # Function to build file-server binaries
@@ -85,12 +95,11 @@ build_file_server() {
         echo "✓ File Server build completed successfully"
     } &> "$log_file"
     
-    if [ $? -ne 0 ]; then
+    local status=$?
+    if [ -f "$log_file" ]; then
         cat "$log_file"
-        return 1
     fi
-    cat "$log_file"
-    return 0
+    return $status
 }
 
 # Function to download hteetp binaries
@@ -138,12 +147,11 @@ download_hteetp() {
         echo "✓ hteetp download completed successfully"
     } &> "$log_file"
     
-    if [ $? -ne 0 ]; then
+    local status=$?
+    if [ -f "$log_file" ]; then
         cat "$log_file"
-        return 1
     fi
-    cat "$log_file"
-    return 0
+    return $status
 }
 
 # Function to download ttyd binaries
@@ -182,7 +190,7 @@ download_ttyd() {
             
             # Verify checksum
             EXPECTED_CHECKSUM=$(grep "ttyd.x86_64" SHA256SUMS | cut -d' ' -f1)
-            ACTUAL_CHECKSUM=$(sha256sum ttyd-x64 | cut -d' ' -f1)
+            ACTUAL_CHECKSUM=$(sha256_file ttyd-x64)
             
             if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
                 echo "✗ Checksum verification failed for ttyd-x64!"
@@ -208,7 +216,7 @@ download_ttyd() {
             
             # Verify checksum
             EXPECTED_CHECKSUM=$(grep "ttyd.aarch64" SHA256SUMS | cut -d' ' -f1)
-            ACTUAL_CHECKSUM=$(sha256sum ttyd-arm64 | cut -d' ' -f1)
+            ACTUAL_CHECKSUM=$(sha256_file ttyd-arm64)
             
             if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
                 echo "✗ Checksum verification failed for ttyd-arm64!"
@@ -232,12 +240,11 @@ download_ttyd() {
         echo "✓ ttyd download completed successfully"
     } &> "$log_file"
     
-    if [ $? -ne 0 ]; then
+    local status=$?
+    if [ -f "$log_file" ]; then
         cat "$log_file"
-        return 1
     fi
-    cat "$log_file"
-    return 0
+    return $status
 }
 
 # Function to download Claude Code binaries
@@ -296,7 +303,7 @@ download_claude() {
             echo "✓ Downloaded claude-x64"
             
             # Verify checksum
-            ACTUAL_CHECKSUM=$(sha256sum claude-x64 | cut -d' ' -f1)
+            ACTUAL_CHECKSUM=$(sha256_file claude-x64)
             if [ "$ACTUAL_CHECKSUM" != "$CHECKSUM_X64" ]; then
                 echo "✗ Checksum verification failed for claude-x64!"
                 echo "  Expected: $CHECKSUM_X64"
@@ -320,7 +327,7 @@ download_claude() {
             echo "✓ Downloaded claude-arm64"
             
             # Verify checksum
-            ACTUAL_CHECKSUM=$(sha256sum claude-arm64 | cut -d' ' -f1)
+            ACTUAL_CHECKSUM=$(sha256_file claude-arm64)
             if [ "$ACTUAL_CHECKSUM" != "$CHECKSUM_ARM64" ]; then
                 echo "✗ Checksum verification failed for claude-arm64!"
                 echo "  Expected: $CHECKSUM_ARM64"
@@ -340,12 +347,11 @@ download_claude() {
         echo "✓ Claude Code download completed successfully"
     } &> "$log_file"
     
-    if [ $? -ne 0 ]; then
+    local status=$?
+    if [ -f "$log_file" ]; then
         cat "$log_file"
-        return 1
     fi
-    cat "$log_file"
-    return 0
+    return $status
 }
 
 # Function to download Codex binaries
@@ -414,12 +420,11 @@ download_codex() {
         echo "✓ Codex download completed successfully"
     } &> "$log_file"
     
-    if [ $? -ne 0 ]; then
+    local status=$?
+    if [ -f "$log_file" ]; then
         cat "$log_file"
-        return 1
     fi
-    cat "$log_file"
-    return 0
+    return $status
 }
 
 # Function to build Gemini CLI binaries
@@ -478,12 +483,11 @@ build_gemini() {
         echo "✓ Gemini CLI build completed successfully"
     } &> "$log_file"
     
-    if [ $? -ne 0 ]; then
+    local status=$?
+    if [ -f "$log_file" ]; then
         cat "$log_file"
-        return 1
     fi
-    cat "$log_file"
-    return 0
+    return $status
 }
 
 # Function to download Chrome binaries
@@ -547,63 +551,81 @@ download_chrome() {
         echo "✓ Chromium download completed successfully"
     } &> "$log_file"
     
-    if [ $? -ne 0 ]; then
+    local status=$?
+    if [ -f "$log_file" ]; then
         cat "$log_file"
-        return 1
     fi
-    cat "$log_file"
-    return 0
+    return $status
 }
 
-# Function to download Mineflayer binaries
-download_mineflayer() {
-    local log_file="$LOG_DIR/mineflayer.log"
-    {
-        echo "=== Downloading Mineflayer binaries ==="
+# Function to download mineflare binaries
+download_mineflare() {
+    local log_file="$LOG_DIR/mineflare.log"
+    (
+        set -e
+        echo "=== Downloading mineflare binaries ==="
         
         REPO="eastlondoner/mineflare-cli"
         
-        echo "Getting latest Mineflayer version..."
-        MINEFLAYER_VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+        # Prefer GitHub direct latest download URLs to avoid API rate limits
+        URL_X64_DIRECT="https://github.com/$REPO/releases/latest/download/mineflare-linux-x64.tar.gz"
+        URL_ARM64_DIRECT="https://github.com/$REPO/releases/latest/download/mineflare-linux-x64"
         
-        if [ -z "$MINEFLAYER_VERSION" ]; then
-            echo "✗ Failed to get latest Mineflayer version!"
-            return 1
-        fi
-        
-        echo "Latest Mineflayer version: $MINEFLAYER_VERSION"
-        
-        echo "Downloading mineflayer-linux-x64..."
-        MINEFLAYER_URL_X64="https://github.com/$REPO/releases/download/${MINEFLAYER_VERSION}/mineflayer-x86_64-unknown-linux-gnu"
-        if curl -fsSL -o mineflayer-x64 "$MINEFLAYER_URL_X64"; then
-            echo "✓ Downloaded mineflayer-x64"
-            chmod +x mineflayer-x64
-            ls -lh ./mineflayer-x64
+        echo "Downloading mineflare-linux-x64 (direct latest)..."
+        if curl -fsSL -o mineflare-x64 "$URL_X64_DIRECT"; then
+            echo "✓ Downloaded mineflare-x64 (latest)"
+            chmod +x mineflare-x64
+            ls -lh ./mineflare-x64
         else
-            echo "✗ Failed to download mineflayer-x64!"
-            return 1
+            echo "Direct latest x64 failed, discovering exact tag via redirect..."
+            LATEST_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" || true)
+            TAG=${LATEST_URL##*/}
+            if [ -z "$TAG" ]; then
+                echo "✗ Failed to determine latest release tag for mineflare"
+                exit 1
+            fi
+            URL_X64="https://github.com/$REPO/releases/download/${TAG}/mineflare-x86_64-unknown-linux-gnu"
+            if curl -fsSL -o mineflare-x64 "$URL_X64"; then
+                echo "✓ Downloaded mineflare-x64 ($TAG)"
+                chmod +x mineflare-x64
+                ls -lh ./mineflare-x64
+            else
+                echo "✗ Failed to download mineflare-x64 from $URL_X64"
+                exit 1
+            fi
         fi
         
-        echo "Downloading mineflayer-linux-arm64..."
-        MINEFLAYER_URL_ARM64="https://github.com/$REPO/releases/download/${MINEFLAYER_VERSION}/mineflayer-aarch64-unknown-linux-gnu"
-        if curl -fsSL -o mineflayer-arm64 "$MINEFLAYER_URL_ARM64"; then
-            echo "✓ Downloaded mineflayer-arm64"
-            chmod +x mineflayer-arm64
-            ls -lh ./mineflayer-arm64
+        echo "Downloading mineflare-linux-arm64 (direct latest)..."
+        if curl -fsSL -o mineflare-arm64 "$URL_ARM64_DIRECT"; then
+            echo "✓ Downloaded mineflare-arm64 (latest)"
+            chmod +x mineflare-arm64
+            ls -lh ./mineflare-arm64
         else
-            echo "✗ Failed to download mineflayer-arm64!"
-            return 1
+            echo "Direct latest arm64 failed, discovering exact tag via redirect..."
+            LATEST_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" || true)
+            TAG=${LATEST_URL##*/}
+            if [ -z "$TAG" ]; then
+                echo "✗ Failed to determine latest release tag for mineflare"
+                exit 1
+            fi
+            URL_ARM64="https://github.com/$REPO/releases/download/${TAG}/mineflare-aarch64-unknown-linux-gnu"
+            if curl -fsSL -o mineflare-arm64 "$URL_ARM64"; then
+                echo "✓ Downloaded mineflare-arm64 ($TAG)"
+                chmod +x mineflare-arm64
+                ls -lh ./mineflare-arm64
+            else
+                echo "✗ Failed to download mineflare-arm64 from $URL_ARM64"
+                exit 1
+            fi
         fi
         
-        echo "✓ Mineflayer download completed successfully"
-    } &> "$log_file"
-    
-    if [ $? -ne 0 ]; then
+        echo "✓ mineflare download completed successfully"
+    ) &> "$log_file"
+    local status=$?
+    if [ -f "$log_file" ]; then
         cat "$log_file"
-        return 1
     fi
-    cat "$log_file"
-    return 0
+    return $status
 }
 
 echo ""
@@ -635,18 +657,21 @@ PID_GEMINI=$!
 ( download_chrome || download_chrome ) &
 PID_CHROME=$!
 
-( download_mineflayer || download_mineflayer ) &
-PID_MINEFLAYER=$!
+( download_mineflare || download_mineflare ) &
+PID_mineflare=$!
 
 # Wait for all tasks and collect exit codes (bash 3.2 compatible)
-PIDS=($PID_HTTP_PROXY $PID_FILE_SERVER $PID_HTEETP $PID_TTYD $PID_CLAUDE $PID_CODEX $PID_GEMINI $PID_CHROME $PID_MINEFLAYER)
-TASK_NAMES=("HTTP Proxy build" "File Server build" "hteetp download" "ttyd download" "Claude Code download" "Codex download" "Gemini CLI build" "Chrome download" "Mineflayer download")
+PIDS=($PID_HTTP_PROXY $PID_FILE_SERVER $PID_HTEETP $PID_TTYD $PID_CLAUDE $PID_CODEX $PID_GEMINI $PID_CHROME $PID_mineflare)
+TASK_NAMES=("HTTP Proxy build" "File Server build" "hteetp download" "ttyd download" "Claude Code download" "Codex download" "Gemini CLI build" "Chrome download" "mineflare download")
 TASK_STATUS=()
 
-# Wait for each task and collect status
+# Wait for each task and collect status without aborting on failures (set -e safe)
 for pid in "${PIDS[@]}"; do
-    wait $pid
-    TASK_STATUS+=($?)
+    if wait $pid; then
+        TASK_STATUS+=(0)
+    else
+        TASK_STATUS+=($?)
+    fi
 done
 
 # Check if any tasks failed
@@ -668,7 +693,7 @@ if [ ${#FAILED_TASKS[@]} -eq 0 ]; then
     echo "  - codex-x64, codex-arm64"
     echo "  - gemini-x64, gemini-arm64"
     echo "  - chrome-x64, chrome-arm64"
-    echo "  - mineflayer-x64, mineflayer-arm64"
+    echo "  - mineflare-x64, mineflare-arm64"
     exit 0
 else
     echo "✗ The following tasks failed:"

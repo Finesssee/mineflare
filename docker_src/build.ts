@@ -81,7 +81,7 @@ if (buildServicesHash && existsSync(BUILD_SERVICES_CACHE_FILE)) {
         const cache = JSON.parse(cacheRaw) as { hash: string; lastRunMs: number };
         const hashMatches = cache.hash === buildServicesHash;
         const recentlyRan = (nowMs - cache.lastRunMs) < SIX_HOURS_MS;
-        
+
         // Verify all required binaries exist
         const requiredBinaries = [
             "./http-proxy-x64",
@@ -100,19 +100,22 @@ if (buildServicesHash && existsSync(BUILD_SERVICES_CACHE_FILE)) {
             "./gemini-arm64",
             "./chrome-x64.tar.gz",
             "./chrome-arm64.tar.gz",
-            "./mineflayer-x64",
-            "./mineflayer-arm64",
+            "./mineflare-x64",
+            "./mineflare-arm64",
         ];
-        
+
+        // Decide based on binaries and cache state
         const allBinariesExist = requiredBinaries.every(binary => existsSync(binary));
-        
-        // If binaries are missing, always rebuild regardless of cache state
+
         if (!allBinariesExist) {
             console.log("Some binaries are missing, rebuilding container services");
-            shouldRunBuildServices = true;
-        } else if (hashMatches && recentlyRan) {
-            shouldRunBuildServices = false;
-            console.log("Skipping build-container-services: hash unchanged and ran within last 6 hours");
+            // Leave shouldRunBuildServices = true (default)
+        } else {
+            const canSkipBuild = hashMatches && recentlyRan;
+            if (canSkipBuild) {
+                shouldRunBuildServices = false;
+                console.log("Skipping build-container-services: hash unchanged and ran within last 6 hours");
+            }
         }
     } catch (error) {
         console.warn("Failed to read/parse .BUILD_CONTAINER_SERVICES; will run build-container-services", error);

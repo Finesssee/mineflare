@@ -87,7 +87,7 @@ COPY --chmod=755 \
     claude-x64 claude-arm64 \
     codex-x64 codex-arm64 \
     gemini-x64 gemini-arm64 \
-    mineflayer-x64 mineflayer-arm64 \
+    mineflare-x64 mineflare-arm64 \
     /tmp/
 
 # Copy all Chrome binaries to a temporary location. We will select the correct one for the
@@ -114,13 +114,22 @@ RUN set -eux; \
     mv "/tmp/claude-$arch_suffix" /usr/local/bin/claude; \
     mv "/tmp/codex-$arch_suffix" /usr/local/bin/codex; \
     mv "/tmp/gemini-$arch_suffix" /usr/local/bin/gemini; \
-    mv "/tmp/mineflayer-$arch_suffix" /usr/local/bin/mineflayer; \
+    mv "/tmp/mineflare-$arch_suffix" /usr/local/bin/mineflare; \
     mkdir -p /opt/chrome; \
     tar -xzf "/tmp/chrome-$arch_suffix.tar.gz" -C /opt/chrome; \
     chmod -R 755 /opt/chrome; \
     rm -rf /tmp/*
 
 COPY CLAUDE.md /data/CLAUDE.md
+
+# Fetch latest mineflare-cli README and place in /docs for AI agent reference
+RUN mkdir -p /docs \
+    && curl -fsSL https://github.com/eastlondoner/mineflare-cli/raw/refs/heads/main/README.md \
+        -o /docs/MINEFLARE_CLI.md \
+    && curl -fsSL https://github.com/eastlondoner/mineflare-cli/raw/refs/heads/main/mineflare_EXECUTABLE.md \
+        -o /docs/mineflare_EXECUTABLE.md \
+    && chown -R 1000:1000 /docs
+
 RUN mkdir -p /run/tailscale \
     && mkdir -p /data/plugins/spark \
     && echo '{"_header":"spark configuration file - https://spark.lucko.me/docs/Configuration","backgroundProfiler":false}' > /data/plugins/spark/config.json \

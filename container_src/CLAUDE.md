@@ -29,3 +29,35 @@ OpenJDK 64-Bit Server VM Temurin-21.0.8+9 (build 21.0.8+9-LTS, mixed mode, shari
 Most things you need are in the /data directory.
 
 You can run rcon-cli to interact with the server by sending commands. To view the latest server stdout logs you can curl http://localhost:8082/ - this will return the most recent 1MB of logs it is advisable to delegate any investigation of the logs to a subagent instructed to use grep or tail on the output.
+
+## mineflare Bot Controller
+
+The `mineflare` CLI is available at `/usr/local/bin/mineflare`. This is an AI-controlled Minecraft bot with HTTP API and CLI interface that can:
+
+- **Join the Minecraft server** as a bot player and perform automated tasks
+- **HTTP API** - REST endpoints for AI agents to control the bot programmatically
+- **Event Logging** - Timestamped events (chat, health, spawns, player interactions, etc.)
+- **Screenshots** - Base64 encoded screenshots of the bot's view
+- **Block Manipulation** - Dig/break blocks, place blocks, full block interaction
+- **Crafting System** - Craft items with recipes, check available recipes
+- **Equipment Management** - Equip items to different slots
+- **Real-time Control** - Move, jump, sprint, look around, attack entities, send chat
+- **Batch Commands** - Execute multiple commands in sequence from JSON files
+
+**Documentation**: Full documentation is available at `/docs/MINEFLARE_CLI.md` and `/docs/mineflare_EXECUTABLE.md`
+
+**Quick Start**:
+```bash
+# Start the bot server as a daemon
+mineflare server start --daemon
+
+# Control the bot
+mineflare chat "Hello world!"
+mineflare move -x 1 --sprint
+mineflare batch -f examples/batch-simple.json
+
+# Stop the server
+mineflare server stop
+```
+
+The bot connects to localhost:25565 by default (the Minecraft server running in this container). You can configure it via environment variables or the `.env` file.
