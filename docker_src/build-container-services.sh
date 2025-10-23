@@ -569,7 +569,7 @@ download_mineflare() {
         
         # Prefer GitHub direct latest download URLs to avoid API rate limits
         URL_X64_DIRECT="https://github.com/$REPO/releases/latest/download/mineflare-linux-x64.tar.gz"
-        URL_ARM64_DIRECT="https://github.com/$REPO/releases/latest/download/mineflare-linux-x64"
+        URL_ARM64_DIRECT="https://github.com/$REPO/releases/latest/download/mineflare-linux-arm64.tar.gz"
         
         echo "Downloading mineflare-linux-x64 (direct latest)..."
         if curl -fsSL -o mineflare-x64 "$URL_X64_DIRECT"; then
@@ -584,7 +584,8 @@ download_mineflare() {
                 echo "✗ Failed to determine latest release tag for mineflare"
                 exit 1
             fi
-            URL_X64="https://github.com/$REPO/releases/download/${TAG}/mineflare-x86_64-unknown-linux-gnu"
+            URL_X64="https://github.com/$REPO/releases/download/${TAG}/mineflare-linux-x64.tar.gz
+"
             if curl -fsSL -o mineflare-x64 "$URL_X64"; then
                 echo "✓ Downloaded mineflare-x64 ($TAG)"
                 chmod +x mineflare-x64
@@ -608,7 +609,7 @@ download_mineflare() {
                 echo "✗ Failed to determine latest release tag for mineflare"
                 exit 1
             fi
-            URL_ARM64="https://github.com/$REPO/releases/download/${TAG}/mineflare-aarch64-unknown-linux-gnu"
+            URL_ARM64="https://github.com/$REPO/releases/download/${TAG}/mineflare-linux-arm64.tar.gz"
             if curl -fsSL -o mineflare-arm64 "$URL_ARM64"; then
                 echo "✓ Downloaded mineflare-arm64 ($TAG)"
                 chmod +x mineflare-arm64

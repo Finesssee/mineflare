@@ -126,8 +126,10 @@ COPY CLAUDE.md /data/CLAUDE.md
 RUN mkdir -p /docs \
     && curl -fsSL https://github.com/eastlondoner/mineflare-cli/raw/refs/heads/main/README.md \
         -o /docs/MINEFLARE_CLI.md \
-    && curl -fsSL https://github.com/eastlondoner/mineflare-cli/raw/refs/heads/main/mineflare_EXECUTABLE.md \
-        -o /docs/mineflare_EXECUTABLE.md \
+    && curl -fsSL https://github.com/eastlondoner/mineflare-cli/raw/refs/heads/main/MINEFLARE_EXECUTABLE.md \
+        -o /docs/MINEFLARE_EXECUTABLE.md \
+    && curl -fsSL https://github.com/eastlondoner/mineflare-cli/raw/refs/heads/main/CONFIGURATION.md \
+        -o /docs/MINEFLARE_CONFIGURATION.md \
     && chown -R 1000:1000 /docs
 
 RUN mkdir -p /run/tailscale \
