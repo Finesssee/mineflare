@@ -34,8 +34,8 @@ RUN mkdir -p /data/.local/gemini/checkpoints \
     /data/.local/claude
 
 # Configure Gemini CLI for maximum autonomy
-RUN mkdir -p /data/.gemini
-COPY gemini-settings.json /data/.gemini/settings.json
+RUN sudo mkdir -p /etc/gemini-cli/ && sudo chmod 755 /etc/gemini-cli/
+COPY gemini-settings.json /etc/gemini-cli/system-defaults.json
 
 # Configure Codex CLI for maximum autonomy
 # Place config in /data/.local/codex since CODEX_HOME will be set to this location

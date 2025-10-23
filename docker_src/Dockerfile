@@ -58,7 +58,7 @@ RUN wget -qO- https://github.com/novnc/websockify/archive/refs/tags/v0.11.0.tar.
     && mv /opt/websockify-0.11.0 /opt/websockify
 
 ENV TAILSCALE_STATE_DIR=/var/lib/tailscale/tailscaled.state
-ENV SERVER_PORT=8081
+ENV SERVER_PORT=25565
 ENV TYPE=PAPER
 # VERSION will be set at runtime by the container (default: 1.21.8)
 ENV VERSION=1.21.8
@@ -141,7 +141,7 @@ RUN mkdir -p /run/tailscale \
 # Expose ports:
 # === Minecraft Server ===
 # 8080 - Health checks
-# 8081 - Minecraft game traffic  
+# 25565 - Minecraft game traffic  
 # 25575 - RCON console
 #
 # === Internal Services ===

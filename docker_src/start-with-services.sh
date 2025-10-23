@@ -9,7 +9,7 @@ set -euo pipefail
 # PORT ALLOCATION:
 # === Minecraft Server ===
 # 8080  - Health checks
-# 8081  - Minecraft game traffic
+# 25565  - Minecraft game traffic
 # 25575 - RCON console
 #
 # === Internal Services ===

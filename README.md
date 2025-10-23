@@ -87,7 +87,7 @@ These instructions are only if you do not want to use playit.gg and want to use 
 2. Generate a Tailscale authentication key in your Tailscale account settings
 3. Create a TS_AUTHKEY *build* secret in your mineflare worker on Cloudflare and re-deploy your worker
 4. Look in your tailscale dashboard for a new node called "cloudchamber", grab the private IP address
-5. Create a new server in Minecraft using the address `<tailscale private ip>:8081` and connect to your Cloudflare Minecraft server
+5. Create a new server in Minecraft using the address `<tailscale private ip>` and connect to your Cloudflare Minecraft server
 
 ### Using Cloudflare Tunnels for super secure private networking
 
