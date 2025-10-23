@@ -123,13 +123,13 @@ RUN set -eux; \
 COPY CLAUDE.md /data/CLAUDE.md
 
 # Fetch latest mineflare-cli README and place in /docs for AI agent reference
-RUN mkdir -p /docs \
+RUN mkdir -p /docs/mineflare-cli \
     && curl -fsSL https://github.com/eastlondoner/mineflare-cli/raw/refs/heads/main/README.md \
-        -o /docs/MINEFLARE_CLI.md \
+        -o /docs/mineflare-cli/README.md \
     && curl -fsSL https://github.com/eastlondoner/mineflare-cli/raw/refs/heads/main/MINEFLARE_EXECUTABLE.md \
-        -o /docs/MINEFLARE_EXECUTABLE.md \
+        -o /docs/mineflare-cli/MINEFLARE_EXECUTABLE.md \
     && curl -fsSL https://github.com/eastlondoner/mineflare-cli/raw/refs/heads/main/CONFIGURATION.md \
-        -o /docs/MINEFLARE_CONFIGURATION.md \
+        -o /docs/mineflare-cli/CONFIGURATION.md \
     && chown -R 1000:1000 /docs
 
 RUN mkdir -p /run/tailscale \

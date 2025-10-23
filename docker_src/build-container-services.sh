@@ -12,8 +12,8 @@ OFFLINE_FLAG="${MINEFLARE_OFFLINE_MODE:-${MINEFLARE_OFFLINE:-false}}"
 OFFLINE_FLAG=$(printf '%s' "$OFFLINE_FLAG" | tr '[:upper:]' '[:lower:]')
 
 if [[ "$OFFLINE_FLAG" != "true" ]]; then
-    if command -v gh &> /dev/null; then
-        if gh auth status &> /dev/null; then
+    if command -v gh &>/dev/null; then
+        if gh auth status &>/dev/null; then
             GH_TOKEN=$(gh auth token 2>/dev/null | tr -d '\r\n')
             if [[ -n "$GH_TOKEN" ]]; then
                 echo "Using GitHub token from gh CLI"
@@ -49,7 +49,7 @@ if [[ "$OFFLINE_FLAG" == "true" ]]; then
         "chrome-x64.tar.gz"
         "chrome-arm64.tar.gz"
         "mineflare-x64"
-        "mineflare-x64-baseline"
+        "mineflare-arm64"
     )
 
     MISSING_FILES=()
@@ -75,16 +75,16 @@ fi
 # Ensure required tooling for online mode
 MISSING_TOOLS=()
 if [[ "$OFFLINE_FLAG" != "true" ]]; then
-    if ! command -v bun &> /dev/null; then
+    if ! command -v bun &>/dev/null; then
         MISSING_TOOLS+=("bun")
     fi
-    if ! command -v jq &> /dev/null; then
+    if ! command -v jq &>/dev/null; then
         MISSING_TOOLS+=("jq")
     fi
-    if ! command -v curl &> /dev/null; then
+    if ! command -v curl &>/dev/null; then
         MISSING_TOOLS+=("curl")
     fi
-    if ! command -v unzip &> /dev/null; then
+    if ! command -v unzip &>/dev/null; then
         MISSING_TOOLS+=("unzip")
     fi
 
@@ -113,10 +113,10 @@ build_http_proxy() {
     local log_file="$LOG_DIR/http-proxy.log"
     {
         echo "=== Building HTTP Proxy ==="
-        
+
         echo "Compiling http-proxy.ts for linux-x64..."
         bun build --compile ./http-proxy.ts --target=bun-linux-x64 --outfile=http-proxy-x64
-        
+
         if [ -f "./http-proxy-x64" ]; then
             echo "✓ Build successful! Binary created: ./http-proxy-x64"
             ls -lh ./http-proxy-x64
@@ -124,10 +124,10 @@ build_http_proxy() {
             echo "✗ x64 build failed!"
             return 1
         fi
-        
+
         echo "Compiling http-proxy.ts for linux-arm64..."
         bun build --compile ./http-proxy.ts --target=bun-linux-arm64 --outfile=http-proxy-arm64
-        
+
         if [ -f "./http-proxy-arm64" ]; then
             echo "✓ Build successful! Binary created: ./http-proxy-arm64"
             ls -lh ./http-proxy-arm64
@@ -135,10 +135,10 @@ build_http_proxy() {
             echo "✗ arm64 build failed!"
             return 1
         fi
-        
+
         echo "✓ HTTP Proxy build completed successfully"
-    } &> "$log_file"
-    
+    } &>"$log_file"
+
     local exit_status=$?
     if [[ -f "$log_file" ]]; then
         cat "$log_file"
@@ -151,10 +151,10 @@ build_file_server() {
     local log_file="$LOG_DIR/file-server.log"
     {
         echo "=== Building File Server ==="
-        
+
         echo "Compiling file-server.ts for linux-x64..."
         bun build --compile ./file-server.ts --target=bun-linux-x64 --outfile=file-server-x64
-        
+
         if [ -f "./file-server-x64" ]; then
             echo "✓ Build successful! Binary created: ./file-server-x64"
             ls -lh ./file-server-x64
@@ -162,10 +162,10 @@ build_file_server() {
             echo "✗ x64 build failed!"
             return 1
         fi
-        
+
         echo "Compiling file-server.ts for linux-arm64..."
         bun build --compile ./file-server.ts --target=bun-linux-arm64 --outfile=file-server-arm64
-        
+
         if [ -f "./file-server-arm64" ]; then
             echo "✓ Build successful! Binary created: ./file-server-arm64"
             ls -lh ./file-server-arm64
@@ -173,10 +173,10 @@ build_file_server() {
             echo "✗ arm64 build failed!"
             return 1
         fi
-        
+
         echo "✓ File Server build completed successfully"
-    } &> "$log_file"
-    
+    } &>"$log_file"
+
     local exit_status=$?
     if [[ -f "$log_file" ]]; then
         cat "$log_file"
@@ -189,19 +189,19 @@ download_hteetp() {
     local log_file="$LOG_DIR/hteetp.log"
     {
         echo "=== Downloading hteetp binaries ==="
-        
+
         REPO="eastlondoner/hteetp"
-        
+
         echo "Getting latest hteetp version..."
         VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
-        
+
         if [ -z "$VERSION" ]; then
             echo "✗ Failed to get latest hteetp version!"
             return 1
         fi
-        
+
         echo "Latest hteetp version: $VERSION"
-        
+
         echo "Downloading hteetp-linux-x64..."
         DOWNLOAD_URL_X64="https://github.com/$REPO/releases/download/$VERSION/hteetp-linux-x64.gz"
         if curl -L "${GITHUB_AUTH_HEADER[@]}" -o hteetp-linux-x64.gz "$DOWNLOAD_URL_X64"; then
@@ -213,7 +213,7 @@ download_hteetp() {
             echo "✗ Failed to download hteetp-linux-x64!"
             return 1
         fi
-        
+
         echo "Downloading hteetp-linux-arm64..."
         DOWNLOAD_URL_ARM64="https://github.com/$REPO/releases/download/$VERSION/hteetp-linux-arm64.gz"
         if curl -L "${GITHUB_AUTH_HEADER[@]}" -o hteetp-linux-arm64.gz "$DOWNLOAD_URL_ARM64"; then
@@ -225,10 +225,10 @@ download_hteetp() {
             echo "✗ Failed to download hteetp-linux-arm64!"
             return 1
         fi
-        
+
         echo "✓ hteetp download completed successfully"
-    } &> "$log_file"
-    
+    } &>"$log_file"
+
     local exit_status=$?
     if [[ -f "$log_file" ]]; then
         cat "$log_file"
@@ -241,19 +241,19 @@ download_ttyd() {
     local log_file="$LOG_DIR/ttyd.log"
     {
         echo "=== Downloading ttyd binaries ==="
-        
+
         REPO="eastlondoner/ttyd"
-        
+
         echo "Getting latest ttyd version..."
         VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
-        
+
         if [ -z "$VERSION" ]; then
             echo "✗ Failed to get latest ttyd version!"
             return 1
         fi
-        
+
         echo "Latest ttyd version: $VERSION"
-        
+
         # Download SHA256SUMS for verification
         echo "Downloading SHA256SUMS..."
         SUMS_URL="https://github.com/$REPO/releases/download/$VERSION/SHA256SUMS"
@@ -263,65 +263,91 @@ download_ttyd() {
             echo "✗ Failed to download SHA256SUMS!"
             return 1
         fi
-        
-        # Download ttyd-x64 (x86_64)
-        echo "Downloading ttyd.x86_64..."
+
+        # Check/download ttyd-x64 (x86_64)
         TTYD_URL_X64="https://github.com/$REPO/releases/download/$VERSION/ttyd.x86_64"
-        if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o ttyd-x64 "$TTYD_URL_X64"; then
-            echo "✓ Downloaded ttyd-x64"
-            
-            # Verify checksum
-            EXPECTED_CHECKSUM=$(grep "ttyd.x86_64" SHA256SUMS | cut -d' ' -f1)
+        EXPECTED_CHECKSUM_X64=$(grep "ttyd.x86_64" SHA256SUMS | cut -d' ' -f1)
+
+        if [[ -f ttyd-x64 ]]; then
             ACTUAL_CHECKSUM=$(sha256_file ttyd-x64)
-            
-            if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
-                echo "✗ Checksum verification failed for ttyd-x64!"
-                echo "  Expected: $EXPECTED_CHECKSUM"
-                echo "  Actual: $ACTUAL_CHECKSUM"
+            if [[ "$ACTUAL_CHECKSUM" == "$EXPECTED_CHECKSUM_X64" ]]; then
+                echo "✓ ttyd-x64 already cached with matching checksum, skipping download"
+            else
+                echo "Local ttyd-x64 checksum mismatch, re-downloading..."
                 rm -f ttyd-x64
+            fi
+        fi
+
+        if [[ ! -f ttyd-x64 ]]; then
+            echo "Downloading ttyd.x86_64..."
+            if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o ttyd-x64 "$TTYD_URL_X64"; then
+                echo "✓ Downloaded ttyd-x64"
+
+                # Verify checksum
+                ACTUAL_CHECKSUM=$(sha256_file ttyd-x64)
+
+                if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM_X64" ]; then
+                    echo "✗ Checksum verification failed for ttyd-x64!"
+                    echo "  Expected: $EXPECTED_CHECKSUM_X64"
+                    echo "  Actual: $ACTUAL_CHECKSUM"
+                    rm -f ttyd-x64
+                    return 1
+                fi
+                echo "✓ Checksum verified for ttyd-x64"
+
+                chmod +x ttyd-x64
+                ls -lh ./ttyd-x64
+            else
+                echo "✗ Failed to download ttyd-x64!"
                 return 1
             fi
-            echo "✓ Checksum verified for ttyd-x64"
-            
-            chmod +x ttyd-x64
-            ls -lh ./ttyd-x64
-        else
-            echo "✗ Failed to download ttyd-x64!"
-            return 1
         fi
-        
-        # Download ttyd-arm64 (aarch64)
-        echo "Downloading ttyd.aarch64..."
+
+        # Check/download ttyd-arm64 (aarch64)
         TTYD_URL_ARM64="https://github.com/$REPO/releases/download/$VERSION/ttyd.aarch64"
-        if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o ttyd-arm64 "$TTYD_URL_ARM64"; then
-            echo "✓ Downloaded ttyd-arm64"
-            
-            # Verify checksum
-            EXPECTED_CHECKSUM=$(grep "ttyd.aarch64" SHA256SUMS | cut -d' ' -f1)
+        EXPECTED_CHECKSUM_ARM64=$(grep "ttyd.aarch64" SHA256SUMS | cut -d' ' -f1)
+
+        if [[ -f ttyd-arm64 ]]; then
             ACTUAL_CHECKSUM=$(sha256_file ttyd-arm64)
-            
-            if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
-                echo "✗ Checksum verification failed for ttyd-arm64!"
-                echo "  Expected: $EXPECTED_CHECKSUM"
-                echo "  Actual: $ACTUAL_CHECKSUM"
+            if [[ "$ACTUAL_CHECKSUM" == "$EXPECTED_CHECKSUM_ARM64" ]]; then
+                echo "✓ ttyd-arm64 already cached with matching checksum, skipping download"
+            else
+                echo "Local ttyd-arm64 checksum mismatch, re-downloading..."
                 rm -f ttyd-arm64
+            fi
+        fi
+
+        if [[ ! -f ttyd-arm64 ]]; then
+            echo "Downloading ttyd.aarch64..."
+            if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o ttyd-arm64 "$TTYD_URL_ARM64"; then
+                echo "✓ Downloaded ttyd-arm64"
+
+                # Verify checksum
+                ACTUAL_CHECKSUM=$(sha256_file ttyd-arm64)
+
+                if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM_ARM64" ]; then
+                    echo "✗ Checksum verification failed for ttyd-arm64!"
+                    echo "  Expected: $EXPECTED_CHECKSUM_ARM64"
+                    echo "  Actual: $ACTUAL_CHECKSUM"
+                    rm -f ttyd-arm64
+                    return 1
+                fi
+                echo "✓ Checksum verified for ttyd-arm64"
+
+                chmod +x ttyd-arm64
+                ls -lh ./ttyd-arm64
+            else
+                echo "✗ Failed to download ttyd-arm64!"
                 return 1
             fi
-            echo "✓ Checksum verified for ttyd-arm64"
-            
-            chmod +x ttyd-arm64
-            ls -lh ./ttyd-arm64
-        else
-            echo "✗ Failed to download ttyd-arm64!"
-            return 1
         fi
-        
+
         # Clean up SHA256SUMS file
         rm -f SHA256SUMS
-        
+
         echo "✓ ttyd download completed successfully"
-    } &> "$log_file"
-    
+    } &>"$log_file"
+
     local exit_status=$?
     if [[ -f "$log_file" ]]; then
         cat "$log_file"
@@ -334,101 +360,127 @@ download_claude() {
     local log_file="$LOG_DIR/claude.log"
     {
         echo "=== Downloading Claude Code binaries ==="
-        
+
         GCS_BUCKET="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
-        
+
         echo "Getting stable Claude Code version..."
         CLAUDE_VERSION=$(curl -fsSL "$GCS_BUCKET/stable")
-        
+
         if [ -z "$CLAUDE_VERSION" ]; then
             echo "✗ Failed to get Claude Code version!"
             return 1
         fi
-        
+
         echo "Claude Code version: $CLAUDE_VERSION"
-        
+
         echo "Downloading manifest..."
         MANIFEST_JSON=$(curl -fsSL "$GCS_BUCKET/$CLAUDE_VERSION/manifest.json")
-        
+
         if [ -z "$MANIFEST_JSON" ]; then
             echo "✗ Failed to download manifest!"
             return 1
         fi
-        
+
         # Check if jq is available
-        if ! command -v jq &> /dev/null; then
+        if ! command -v jq &>/dev/null; then
             echo "✗ jq is required but not installed!"
             return 1
         fi
-        
+
         # Extract checksums for both platforms
         CHECKSUM_X64=$(echo "$MANIFEST_JSON" | jq -r '.platforms["linux-x64"].checksum // empty')
         CHECKSUM_ARM64=$(echo "$MANIFEST_JSON" | jq -r '.platforms["linux-arm64"].checksum // empty')
-        
+
         if [ -z "$CHECKSUM_X64" ] || [[ ! "$CHECKSUM_X64" =~ ^[a-f0-9]{64}$ ]]; then
             echo "✗ Failed to get valid checksum for linux-x64!"
             return 1
         fi
-        
+
         if [ -z "$CHECKSUM_ARM64" ] || [[ ! "$CHECKSUM_ARM64" =~ ^[a-f0-9]{64}$ ]]; then
             echo "✗ Failed to get valid checksum for linux-arm64!"
             return 1
         fi
-        
+
         echo "linux-x64 checksum: $CHECKSUM_X64"
         echo "linux-arm64 checksum: $CHECKSUM_ARM64"
-        
-        # Download and verify claude-linux-x64
-        echo "Downloading claude-linux-x64..."
+
+        # Check/download claude-linux-x64
         CLAUDE_URL_X64="$GCS_BUCKET/$CLAUDE_VERSION/linux-x64/claude"
-        if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o claude-x64 "$CLAUDE_URL_X64"; then
-            echo "✓ Downloaded claude-x64"
-            
-            # Verify checksum
+
+        if [[ -f claude-x64 ]]; then
             ACTUAL_CHECKSUM=$(sha256_file claude-x64)
-            if [ "$ACTUAL_CHECKSUM" != "$CHECKSUM_X64" ]; then
-                echo "✗ Checksum verification failed for claude-x64!"
-                echo "  Expected: $CHECKSUM_X64"
-                echo "  Actual: $ACTUAL_CHECKSUM"
+            if [[ "$ACTUAL_CHECKSUM" == "$CHECKSUM_X64" ]]; then
+                echo "✓ claude-x64 already cached with matching checksum, skipping download"
+            else
+                echo "Local claude-x64 checksum mismatch, re-downloading..."
                 rm -f claude-x64
+            fi
+        fi
+
+        if [[ ! -f claude-x64 ]]; then
+            echo "Downloading claude-linux-x64..."
+            if curl -fsSL -o claude-x64 "$CLAUDE_URL_X64"; then
+                echo "✓ Downloaded claude-x64"
+
+                # Verify checksum
+                ACTUAL_CHECKSUM=$(sha256_file claude-x64)
+                if [ "$ACTUAL_CHECKSUM" != "$CHECKSUM_X64" ]; then
+                    echo "✗ Checksum verification failed for claude-x64!"
+                    echo "  Expected: $CHECKSUM_X64"
+                    echo "  Actual: $ACTUAL_CHECKSUM"
+                    rm -f claude-x64
+                    return 1
+                fi
+                echo "✓ Checksum verified for claude-x64"
+
+                chmod +x claude-x64
+                ls -lh ./claude-x64
+            else
+                echo "✗ Failed to download claude-x64!"
                 return 1
             fi
-            echo "✓ Checksum verified for claude-x64"
-            
-            chmod +x claude-x64
-            ls -lh ./claude-x64
-        else
-            echo "✗ Failed to download claude-x64!"
-            return 1
         fi
-        
-        # Download and verify claude-linux-arm64
-        echo "Downloading claude-linux-arm64..."
+
+        # Check/download claude-linux-arm64
         CLAUDE_URL_ARM64="$GCS_BUCKET/$CLAUDE_VERSION/linux-arm64/claude"
-        if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o claude-arm64 "$CLAUDE_URL_ARM64"; then
-            echo "✓ Downloaded claude-arm64"
-            
-            # Verify checksum
+
+        if [[ -f claude-arm64 ]]; then
             ACTUAL_CHECKSUM=$(sha256_file claude-arm64)
-            if [ "$ACTUAL_CHECKSUM" != "$CHECKSUM_ARM64" ]; then
-                echo "✗ Checksum verification failed for claude-arm64!"
-                echo "  Expected: $CHECKSUM_ARM64"
-                echo "  Actual: $ACTUAL_CHECKSUM"
+            if [[ "$ACTUAL_CHECKSUM" == "$CHECKSUM_ARM64" ]]; then
+                echo "✓ claude-arm64 already cached with matching checksum, skipping download"
+            else
+                echo "Local claude-arm64 checksum mismatch, re-downloading..."
                 rm -f claude-arm64
+            fi
+        fi
+
+        if [[ ! -f claude-arm64 ]]; then
+            echo "Downloading claude-linux-arm64..."
+            if curl -fsSL -o claude-arm64 "$CLAUDE_URL_ARM64"; then
+                echo "✓ Downloaded claude-arm64"
+
+                # Verify checksum
+                ACTUAL_CHECKSUM=$(sha256_file claude-arm64)
+                if [ "$ACTUAL_CHECKSUM" != "$CHECKSUM_ARM64" ]; then
+                    echo "✗ Checksum verification failed for claude-arm64!"
+                    echo "  Expected: $CHECKSUM_ARM64"
+                    echo "  Actual: $ACTUAL_CHECKSUM"
+                    rm -f claude-arm64
+                    return 1
+                fi
+                echo "✓ Checksum verified for claude-arm64"
+
+                chmod +x claude-arm64
+                ls -lh ./claude-arm64
+            else
+                echo "✗ Failed to download claude-arm64!"
                 return 1
             fi
-            echo "✓ Checksum verified for claude-arm64"
-            
-            chmod +x claude-arm64
-            ls -lh ./claude-arm64
-        else
-            echo "✗ Failed to download claude-arm64!"
-            return 1
         fi
-        
+
         echo "✓ Claude Code download completed successfully"
-    } &> "$log_file"
-    
+    } &>"$log_file"
+
     local exit_status=$?
     if [[ -f "$log_file" ]]; then
         cat "$log_file"
@@ -441,26 +493,26 @@ download_codex() {
     local log_file="$LOG_DIR/codex.log"
     {
         echo "=== Downloading Codex binaries ==="
-        
+
         REPO="openai/codex"
-        
+
         echo "Getting latest Codex version..."
         CODEX_TAG=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
-        
+
         if [ -z "$CODEX_TAG" ]; then
             echo "✗ Failed to get latest Codex version!"
             return 1
         fi
-        
+
         # Ensure the rust- prefix is present
         if [[ "$CODEX_TAG" != rust-* ]]; then
             CODEX_VERSION="rust-${CODEX_TAG}"
         else
             CODEX_VERSION="$CODEX_TAG"
         fi
-        
+
         echo "Latest Codex version: $CODEX_VERSION"
-        
+
         echo "Downloading codex-linux-x64..."
         CODEX_URL_X64="https://github.com/$REPO/releases/download/${CODEX_VERSION}/codex-x86_64-unknown-linux-gnu.tar.gz"
         if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o codex-x64.tar.gz "$CODEX_URL_X64"; then
@@ -479,7 +531,7 @@ download_codex() {
             echo "✗ Failed to download codex-x64!"
             return 1
         fi
-        
+
         echo "Downloading codex-linux-arm64..."
         CODEX_URL_ARM64="https://github.com/openai/codex/releases/download/${CODEX_VERSION}/codex-aarch64-unknown-linux-gnu.tar.gz"
         if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o codex-arm64.tar.gz "$CODEX_URL_ARM64"; then
@@ -498,10 +550,10 @@ download_codex() {
             echo "✗ Failed to download codex-arm64!"
             return 1
         fi
-        
+
         echo "✓ Codex download completed successfully"
-    } &> "$log_file"
-    
+    } &>"$log_file"
+
     local exit_status=$?
     if [[ -f "$log_file" ]]; then
         cat "$log_file"
@@ -514,19 +566,19 @@ build_gemini() {
     local log_file="$LOG_DIR/gemini.log"
     {
         echo "=== Building Gemini CLI ==="
-        
+
         REPO="google-gemini/gemini-cli"
-        
+
         echo "Getting latest Gemini CLI version..."
         GEMINI_VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
-        
+
         if [ -z "$GEMINI_VERSION" ]; then
             echo "✗ Failed to get latest Gemini CLI version!"
             return 1
         fi
-        
+
         echo "Latest Gemini CLI version: $GEMINI_VERSION"
-        
+
         echo "Downloading gemini.js..."
         GEMINI_URL="https://github.com/$REPO/releases/download/${GEMINI_VERSION}/gemini.js"
         if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o gemini.js "$GEMINI_URL"; then
@@ -536,10 +588,10 @@ build_gemini() {
             echo "✗ Failed to download gemini.js!"
             return 1
         fi
-        
+
         echo "Compiling gemini.js for linux-x64..."
         bun build --compile ./gemini.js --target=bun-linux-x64 --outfile=gemini-x64
-        
+
         if [ -f "./gemini-x64" ]; then
             echo "✓ Build successful! Binary created: ./gemini-x64"
             ls -lh ./gemini-x64
@@ -547,10 +599,10 @@ build_gemini() {
             echo "✗ x64 build failed!"
             return 1
         fi
-        
+
         echo "Compiling gemini.js for linux-arm64..."
         bun build --compile ./gemini.js --target=bun-linux-arm64 --outfile=gemini-arm64
-        
+
         if [ -f "./gemini-arm64" ]; then
             echo "✓ Build successful! Binary created: ./gemini-arm64"
             ls -lh ./gemini-arm64
@@ -558,13 +610,13 @@ build_gemini() {
             echo "✗ arm64 build failed!"
             return 1
         fi
-        
+
         # Clean up source file
         rm -f gemini.js
-        
+
         echo "✓ Gemini CLI build completed successfully"
-    } &> "$log_file"
-    
+    } &>"$log_file"
+
     local exit_status=$?
     if [[ -f "$log_file" ]]; then
         cat "$log_file"
@@ -577,15 +629,15 @@ download_chrome() {
     local log_file="$LOG_DIR/chrome.log"
     {
         echo "=== Downloading Chromium bundles ==="
-        
+
         # Use Playwright's Chromium builds which include all necessary libraries
-        
+
         # Chromium for Linux x64
         echo "Downloading Chromium for linux-x64 (Playwright build)..."
         CHROMIUM_URL_X64="https://playwright.azureedge.net/builds/chromium/1148/chromium-linux.zip"
         if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o chromium-x64.zip "$CHROMIUM_URL_X64"; then
             echo "✓ Downloaded chromium-x64.zip"
-            
+
             # Extract the entire bundle to a unique directory
             unzip -q chromium-x64.zip -d chrome-linux-x64-tmp
             if [ -d "./chrome-linux-x64-tmp/chrome-linux" ]; then
@@ -604,13 +656,13 @@ download_chrome() {
             echo "✗ Failed to download Chromium for x64!"
             return 1
         fi
-        
+
         # Chromium for Linux ARM64
         echo "Downloading Chromium for linux-arm64 (Playwright build)..."
         CHROMIUM_URL_ARM64="https://playwright.azureedge.net/builds/chromium/1148/chromium-linux-arm64.zip"
         if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o chromium-arm64.zip "$CHROMIUM_URL_ARM64"; then
             echo "✓ Downloaded chromium-arm64.zip"
-            
+
             # Extract the entire bundle to a unique directory
             unzip -q chromium-arm64.zip -d chrome-linux-arm64-tmp
             if [ -d "./chrome-linux-arm64-tmp/chrome-linux" ]; then
@@ -629,10 +681,10 @@ download_chrome() {
             echo "✗ Failed to download Chromium for arm64!"
             return 1
         fi
-        
+
         echo "✓ Chromium download completed successfully"
-    } &> "$log_file"
-    
+    } &>"$log_file"
+
     local exit_status=$?
     if [[ -f "$log_file" ]]; then
         cat "$log_file"
@@ -660,72 +712,125 @@ download_mineflare() {
 
         local archive_x64="mineflare-linux-x64.tar.gz"
         local checksum_x64="mineflare-linux-x64.tar.gz.sha256"
-        echo "Downloading mineflare-linux-x64..."
+        local binary_x64="mineflare-x64"
+
+        echo "Checking mineflare-linux-x64..."
         MINEFLARE_URL_X64="https://github.com/$REPO/releases/download/${MINEFLARE_VERSION}/mineflare-linux-x64.tar.gz"
         MINEFLARE_SHA_URL_X64="${MINEFLARE_URL_X64}.sha256"
-        if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o "$archive_x64" "$MINEFLARE_URL_X64" && \
-           curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o "$checksum_x64" "$MINEFLARE_SHA_URL_X64"; then
-            echo "✓ Downloaded $archive_x64"
-            local expected_sha_x64
+
+        # Download checksum file first
+        if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o "$checksum_x64" "$MINEFLARE_SHA_URL_X64"; then
             expected_sha_x64=$(cut -d' ' -f1 "$checksum_x64")
-            actual_sha_x64=$(sha256_file "$archive_x64")
-            if [[ "$expected_sha_x64" != "$actual_sha_x64" ]]; then
-                echo "✗ SHA256 mismatch for $archive_x64"
-                echo "  Expected: $expected_sha_x64"
-                echo "  Actual:   $actual_sha_x64"
-                rm -f "$archive_x64" "$checksum_x64"
-                return 1
+
+            # Check if binary already exists with matching checksum
+            if [[ -f "$binary_x64" ]]; then
+                actual_sha_x64=$(sha256_file "$binary_x64")
+                if [[ "$expected_sha_x64" == "$actual_sha_x64" ]]; then
+                    echo "✓ $binary_x64 already cached with matching checksum, skipping download"
+                    rm -f "$checksum_x64"
+                else
+                    echo "Local $binary_x64 checksum mismatch, re-downloading..."
+                    rm -f "$binary_x64"
+                fi
             fi
-            tar -xzf "$archive_x64"
-            rm -f "$archive_x64" "$checksum_x64"
-            if [[ -f mineflare-linux-x64 ]]; then
-                mv mineflare-linux-x64 mineflare-x64
-                chmod +x mineflare-x64
-                ls -lh ./mineflare-x64
-            else
-                echo "✗ Extracted archive did not contain mineflare binary"
-                return 1
+
+            # Download if binary doesn't exist or checksum didn't match
+            if [[ ! -f "$binary_x64" ]]; then
+                echo "Downloading mineflare-linux-x64..."
+                if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o "$archive_x64" "$MINEFLARE_URL_X64"; then
+                    echo "✓ Downloaded $archive_x64"
+                    actual_sha_x64=$(sha256_file "$archive_x64")
+                    if [[ "$expected_sha_x64" != "$actual_sha_x64" ]]; then
+                        echo "✗ SHA256 mismatch for $archive_x64"
+                        echo "  Expected: $expected_sha_x64"
+                        echo "  Actual:   $actual_sha_x64"
+                        rm -f "$archive_x64" "$checksum_x64"
+                        return 1
+                    fi
+                    tar -xzf "$archive_x64"
+                    rm -f "$archive_x64"
+                    if [[ -f mineflare-linux-x64 ]]; then
+                        mv mineflare-linux-x64 "$binary_x64"
+                        chmod +x "$binary_x64"
+                        ls -lh ./"$binary_x64"
+                    else
+                        echo "✗ Extracted archive did not contain mineflare binary"
+                        rm -f "$checksum_x64"
+                        return 1
+                    fi
+                else
+                    echo "✗ Failed to download mineflare-x64!"
+                    rm -f "$checksum_x64"
+                    return 1
+                fi
             fi
+            rm -f "$checksum_x64"
         else
-            echo "✗ Failed to download mineflare-x64!"
+            echo "✗ Failed to download checksum file!"
             return 1
         fi
 
-        local archive_baseline="mineflare-linux-x64-baseline.tar.gz"
-        local checksum_baseline="mineflare-linux-x64-baseline.tar.gz.sha256"
-        echo "Downloading mineflare-linux-x64-baseline..."
-        MINEFLARE_URL_BASELINE="https://github.com/$REPO/releases/download/${MINEFLARE_VERSION}/mineflare-linux-x64-baseline.tar.gz"
-        MINEFLARE_SHA_URL_BASELINE="${MINEFLARE_URL_BASELINE}.sha256"
-        if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o "$archive_baseline" "$MINEFLARE_URL_BASELINE" && \
-           curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o "$checksum_baseline" "$MINEFLARE_SHA_URL_BASELINE"; then
-            echo "✓ Downloaded $archive_baseline"
-            local expected_sha_baseline
-            expected_sha_baseline=$(cut -d' ' -f1 "$checksum_baseline")
-            actual_sha_baseline=$(sha256_file "$archive_baseline")
-            if [[ "$expected_sha_baseline" != "$actual_sha_baseline" ]]; then
-                echo "✗ SHA256 mismatch for $archive_baseline"
-                echo "  Expected: $expected_sha_baseline"
-                echo "  Actual:   $actual_sha_baseline"
-                rm -f "$archive_baseline" "$checksum_baseline"
-                return 1
+        local archive_arm64="mineflare-linux-arm64.tar.gz"
+        local checksum_arm64="mineflare-linux-arm64.tar.gz.sha256"
+        local binary_arm64="mineflare-arm64"
+
+        echo "Checking mineflare-linux-arm64..."
+        MINEFLARE_URL_ARM64="https://github.com/$REPO/releases/download/${MINEFLARE_VERSION}/mineflare-linux-arm64.tar.gz"
+        MINEFLARE_SHA_URL_ARM64="${MINEFLARE_URL_ARM64}.sha256"
+
+        # Download checksum file first
+        if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o "$checksum_arm64" "$MINEFLARE_SHA_URL_ARM64"; then
+            expected_sha_arm64=$(cut -d' ' -f1 "$checksum_arm64")
+
+            # Check if binary already exists with matching checksum
+            if [[ -f "$binary_arm64" ]]; then
+                actual_sha_arm64=$(sha256_file "$binary_arm64")
+                if [[ "$expected_sha_arm64" == "$actual_sha_arm64" ]]; then
+                    echo "✓ $binary_arm64 already cached with matching checksum, skipping download"
+                    rm -f "$checksum_arm64"
+                else
+                    echo "Local $binary_arm64 checksum mismatch, re-downloading..."
+                    rm -f "$binary_arm64"
+                fi
             fi
-            tar -xzf "$archive_baseline"
-            rm -f "$archive_baseline" "$checksum_baseline"
-            if [[ -f mineflare-linux-x64-baseline ]]; then
-                mv mineflare-linux-x64-baseline mineflare-x64-baseline
-                chmod +x mineflare-x64-baseline
-                ls -lh ./mineflare-x64-baseline
-            else
-                echo "✗ Extracted archive did not contain mineflare baseline binary"
-                return 1
+
+            # Download if binary doesn't exist or checksum didn't match
+            if [[ ! -f "$binary_arm64" ]]; then
+                echo "Downloading mineflare-linux-arm64..."
+                if curl -fsSL "${GITHUB_AUTH_HEADER[@]}" -o "$archive_arm64" "$MINEFLARE_URL_ARM64"; then
+                    echo "✓ Downloaded $archive_arm64"
+                    actual_sha_arm64=$(sha256_file "$archive_arm64")
+                    if [[ "$expected_sha_arm64" != "$actual_sha_arm64" ]]; then
+                        echo "✗ SHA256 mismatch for $archive_arm64"
+                        echo "  Expected: $expected_sha_arm64"
+                        echo "  Actual:   $actual_sha_arm64"
+                        rm -f "$archive_arm64" "$checksum_arm64"
+                        return 1
+                    fi
+                    tar -xzf "$archive_arm64"
+                    rm -f "$archive_arm64"
+                    if [[ -f mineflare-linux-arm64 ]]; then
+                        mv mineflare-linux-arm64 "$binary_arm64"
+                        chmod +x "$binary_arm64"
+                        ls -lh ./"$binary_arm64"
+                    else
+                        echo "✗ Extracted archive did not contain mineflare ARM64 binary"
+                        rm -f "$checksum_arm64"
+                        return 1
+                    fi
+                else
+                    echo "✗ Failed to download mineflare ARM64 binary!"
+                    rm -f "$checksum_arm64"
+                    return 1
+                fi
             fi
+            rm -f "$checksum_arm64"
         else
-            echo "✗ Failed to download mineflare baseline binary!"
+            echo "✗ Failed to download checksum file!"
             return 1
         fi
-
         echo "✓ Mineflare download completed successfully"
-    } &> "$log_file"
+    } &>"$log_file"
 
     local exit_status=$?
     if [[ -f "$log_file" ]]; then
@@ -741,54 +846,54 @@ echo ""
 # Run all tasks in parallel with a retry
 if [[ "$OFFLINE_FLAG" != "true" ]]; then
 
-( build_http_proxy || build_http_proxy ) &
-PID_HTTP_PROXY=$!
+    (build_http_proxy || build_http_proxy) &
+    PID_HTTP_PROXY=$!
 
-( build_file_server || build_file_server ) &
-PID_FILE_SERVER=$!
+    (build_file_server || build_file_server) &
+    PID_FILE_SERVER=$!
 
-( download_hteetp || download_hteetp ) &
-PID_HTEETP=$!
+    (download_hteetp || download_hteetp) &
+    PID_HTEETP=$!
 
-( download_ttyd || download_ttyd ) &
-PID_TTYD=$!
+    (download_ttyd || download_ttyd) &
+    PID_TTYD=$!
 
-( download_claude || download_claude ) &
-PID_CLAUDE=$!
+    (download_claude || download_claude) &
+    PID_CLAUDE=$!
 
-( download_codex || download_codex ) &
-PID_CODEX=$!
+    (download_codex || download_codex) &
+    PID_CODEX=$!
 
-( build_gemini || build_gemini ) &
-PID_GEMINI=$!
+    (build_gemini || build_gemini) &
+    PID_GEMINI=$!
 
-( download_chrome || download_chrome ) &
-PID_CHROME=$!
+    (download_chrome || download_chrome) &
+    PID_CHROME=$!
 
-( download_mineflare || download_mineflare ) &
-PID_MINEFLARE=$!
+    (download_mineflare || download_mineflare) &
+    PID_MINEFLARE=$!
 
-# Wait for all tasks and collect exit codes (bash 3.2 compatible)
-PIDS=($PID_HTTP_PROXY $PID_FILE_SERVER $PID_HTEETP $PID_TTYD $PID_CLAUDE $PID_CODEX $PID_GEMINI $PID_CHROME $PID_MINEFLARE)
-TASK_NAMES=("HTTP Proxy build" "File Server build" "hteetp download" "ttyd download" "Claude Code download" "Codex download" "Gemini CLI build" "Chrome download" "mineflare download")
-TASK_STATUS=()
+    # Wait for all tasks and collect exit codes (bash 3.2 compatible)
+    PIDS=($PID_HTTP_PROXY $PID_FILE_SERVER $PID_HTEETP $PID_TTYD $PID_CLAUDE $PID_CODEX $PID_GEMINI $PID_CHROME $PID_MINEFLARE)
+    TASK_NAMES=("HTTP Proxy build" "File Server build" "hteetp download" "ttyd download" "Claude Code download" "Codex download" "Gemini CLI build" "Chrome download" "mineflare download")
+    TASK_STATUS=()
 
-# Wait for each task and collect status without aborting on failures (set -e safe)
-for pid in "${PIDS[@]}"; do
-    if ! wait "$pid"; then
-        TASK_STATUS+=(1)
-    else
-        TASK_STATUS+=(0)
-    fi
-done
+    # Wait for each task and collect status without aborting on failures (set -e safe)
+    for pid in "${PIDS[@]}"; do
+        if ! wait "$pid"; then
+            TASK_STATUS+=(1)
+        else
+            TASK_STATUS+=(0)
+        fi
+    done
 
-# Check if any tasks failed
-FAILED_TASKS=()
-for i in $(seq 0 $((${#PIDS[@]} - 1))); do
-    if [ "${TASK_STATUS[$i]}" -ne 0 ]; then
-        FAILED_TASKS+=("${TASK_NAMES[$i]}")
-    fi
-done
+    # Check if any tasks failed
+    FAILED_TASKS=()
+    for i in $(seq 0 $((${#PIDS[@]} - 1))); do
+        if [ "${TASK_STATUS[$i]}" -ne 0 ]; then
+            FAILED_TASKS+=("${TASK_NAMES[$i]}")
+        fi
+    done
 
 else
     FAILED_TASKS=()
