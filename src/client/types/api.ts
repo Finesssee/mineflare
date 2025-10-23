@@ -55,3 +55,18 @@ export interface Plugin {
 export interface PluginsResponse {
   plugins: Plugin[];
 }
+
+export type VersionLabel = 'legacy' | 'stable' | 'experimental';
+
+export interface SupportedVersion {
+  version: string;
+  label: VersionLabel;
+}
+
+export interface VersionResponse {
+  version: string;
+  label: VersionLabel | 'unknown';
+  supported: SupportedVersion[];
+  canChange: boolean;
+  error?: string;
+}

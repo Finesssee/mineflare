@@ -119,6 +119,7 @@ export class MinecraftContainer extends Container {
         
         // Minecraft server configuration
         TYPE: "PAPER",
+        VERSION: "1.21.8", // Default version, will be updated from state on start
         EULA: "TRUE",
         SERVER_HOST: "0.0.0.0",
         ONLINE_MODE: "false",
@@ -155,7 +156,7 @@ export class MinecraftContainer extends Container {
             id    INTEGER PRIMARY KEY,
             json_data BLOB
           );
-          INSERT OR IGNORE INTO state (id, json_data) VALUES (1, jsonb('{"optionalPlugins": ["playit-minecraft-plugin"]}'));
+          INSERT OR IGNORE INTO state (id, json_data) VALUES (1, jsonb('{"optionalPlugins": ["playit-minecraft-plugin"], "serverVersion": "1.21.8"}'));
           CREATE TABLE IF NOT EXISTS auth (
             id INTEGER PRIMARY KEY,
             salt TEXT,
@@ -312,6 +313,65 @@ export class MinecraftContainer extends Container {
       const spec = PLUGIN_SPECS.find(s => s.filename === filename);
       return spec ? [...spec.requiredEnv] : [];
     }
+
+    // =====================
+    // Server Version Management
+    // =====================
+
+    private static readonly SUPPORTED_VERSIONS = ["1.21.7", "1.21.8", "1.21.10"] as const;
+    private static readonly VERSION_LABELS: Record<string, "legacy" | "stable" | "experimental"> = {
+      "1.21.7": "legacy",
+      "1.21.8": "stable",
+      "1.21.10": "experimental",
+    };
+
+    /**
+     * Get the currently configured Minecraft server version
+     */
+    public async getServerVersion(): Promise<{ version: string }> {
+      try {
+        const result = this._sql.exec(
+          `SELECT COALESCE(json_data->>'$.serverVersion', '1.21.8') as version FROM state WHERE id = 1;`
+        ).one();
+        if (!result) {
+          return { version: "1.21.8" };
+        }
+        const version = result.version as string;
+        return { version };
+      } catch (error) {
+        console.error("Failed to get server version:", error);
+        return { version: "1.21.8" };
+      }
+    }
+
+    /**
+     * Set the Minecraft server version (only allowed when server is stopped)
+     */
+    public async setServerVersion({ version }: { version: string }): Promise<{ success: boolean; version: string }> {
+      // Validate version
+      if (!MinecraftContainer.SUPPORTED_VERSIONS.includes(version as any)) {
+        throw new Error(`Unsupported version: ${version}. Supported versions: ${MinecraftContainer.SUPPORTED_VERSIONS.join(", ")}`);
+      }
+
+      // Check if server is stopped
+      const status = await this.getStatus();
+      if (status !== 'stopped') {
+        throw new Error("Server must be stopped to change version");
+      }
+
+      // Update version in state
+      try {
+        this._sql.exec(
+          `UPDATE state SET json_data = jsonb_patch(json_data, jsonb(?)) WHERE id = 1`,
+          JSON.stringify({ serverVersion: version })
+        );
+        console.error(`Server version updated to ${version}`);
+        return { success: true, version };
+      } catch (error) {
+        console.error("Failed to set server version:", error);
+        throw new Error("Failed to update server version");
+      }
+    }
         
     // RCON connection instance
     private rcon: Promise<Rcon> | null = null;
@@ -403,6 +463,17 @@ export class MinecraftContainer extends Container {
           }
         }
       }
+
+      // Apply the configured Minecraft server version
+      console.error("Getting configured server version");
+      const { version: configuredVersion } = await this.getServerVersion();
+      console.error("Configured version:", configuredVersion);
+      if (this.envVars.VERSION !== configuredVersion) {
+        this.envVars.VERSION = configuredVersion;
+        console.error("Updated VERSION to", configuredVersion);
+      }
+      // PAPER_VERSION is not used in our envVars but we can set it for consistency
+      // The itzg image uses VERSION env var
 
       console.error("Getting status");
       if(await this.getStatus() !== 'stopped') {

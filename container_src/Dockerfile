@@ -4,8 +4,15 @@ FROM ${BASE_DOCKERFILE}
 
 # Set XDG_DATA_HOME for all AI CLIs to use /data/.local
 ENV XDG_DATA_HOME=/data/.local
+ENV XDG_CONFIG_HOME=/data/.config
+ENV XDG_CACHE_HOME=/data/.cache
 
 USER 1000:1000
+
+# Create symlink from /home/minecraft to /data and set HOME - note this is NOT creating a circular reference
+# it just ensures we persist all HOME data in the expected mount point
+RUN sudo ln -sf /data /home/minecraft
+ENV HOME=/home/minecraft
 
 # For backwards compatibility with the old wrapper script we need to make claude symlinks to the old binary locations
 RUN sudo ln -s /usr/local/bin/claude /usr/local/bin/claude-x64 && \

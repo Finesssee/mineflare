@@ -1,26 +1,31 @@
 # syntax=docker/dockerfile:1.6
 
-# Multi-stage build for Paper MC versions
-# Accept VERSION as build arg to support multiple versions with separate tags
+# Multi-version Paper Minecraft container
+# This image includes all supported Paper versions (1.21.7, 1.21.8, 1.21.10)
+# The VERSION environment variable selects which version to run at runtime
 
-ARG VERSION=1.21.10
-ARG PAPER_VERSION=${VERSION}
-
-# Stage for Paper installation
+# Stage for Paper installation - install all supported versions
 FROM itzg/minecraft-server:latest AS paper-install
-ARG PAPER_VERSION
-RUN mkdir -p /opt/minecraft/server/${PAPER_VERSION} && /usr/bin/mc-image-helper install-paper \
+RUN mkdir -p /opt/minecraft/server/1.21.7 && /usr/bin/mc-image-helper install-paper \
     --project=paper \
-    --version=${PAPER_VERSION} \
-    --output-directory=/opt/minecraft/server/${PAPER_VERSION} \
-    --results-file=/opt/minecraft/server/${PAPER_VERSION}/.paper-${PAPER_VERSION}.env
+    --version=1.21.7 \
+    --output-directory=/opt/minecraft/server/1.21.7 \
+    --results-file=/opt/minecraft/server/1.21.7/.paper-1.21.7.env
+
+RUN mkdir -p /opt/minecraft/server/1.21.8 && /usr/bin/mc-image-helper install-paper \
+    --project=paper \
+    --version=1.21.8 \
+    --output-directory=/opt/minecraft/server/1.21.8 \
+    --results-file=/opt/minecraft/server/1.21.8/.paper-1.21.8.env
+
+RUN mkdir -p /opt/minecraft/server/1.21.10 && /usr/bin/mc-image-helper install-paper \
+    --project=paper \
+    --version=1.21.10 \
+    --output-directory=/opt/minecraft/server/1.21.10 \
+    --results-file=/opt/minecraft/server/1.21.10/.paper-1.21.10.env
 
 # Final stage - main image
 FROM itzg/minecraft-server:latest
-
-# Declare build args for Paper version
-ARG VERSION=1.21.10
-ARG PAPER_VERSION=${VERSION}
 
 # First we do a bunch of heavy lifting to install the dependencies for paper plugin development
 # this is first to maximize build caching
@@ -55,17 +60,15 @@ RUN wget -qO- https://github.com/novnc/websockify/archive/refs/tags/v0.11.0.tar.
 ENV TAILSCALE_STATE_DIR=/var/lib/tailscale/tailscaled.state
 ENV SERVER_PORT=8081
 ENV TYPE=PAPER
-# VERSION is set via build arg and propagated to runtime
-ARG PAPER_VERSION
-ENV VERSION=${PAPER_VERSION}
+# VERSION will be set at runtime by the container (default: 1.21.8)
+ENV VERSION=1.21.8
 ENV PATH="/root/.bun/bin:/data/.local/bin:${PATH}"
 
 # Create directories for server jars and plugins outside /data
 RUN mkdir -p /opt/minecraft/server /opt/minecraft/plugins
 
-# Copy pre-downloaded Paper from build stage
-ARG PAPER_VERSION
-COPY --from=paper-install /opt/minecraft/server/${PAPER_VERSION} /opt/minecraft/server
+# Copy ALL pre-downloaded Paper versions from build stage
+COPY --from=paper-install /opt/minecraft/server /opt/minecraft/server
 RUN ls -la /opt/minecraft/server && chown -R 1000:1000 /opt/minecraft
 
 COPY --chmod=755 start-with-services.sh /usr/local/bin/start-with-services.sh

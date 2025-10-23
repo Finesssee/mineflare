@@ -7,6 +7,7 @@ import { Plugins } from './components/Plugins';
 import { Login } from './components/Login';
 import { useAuth } from './hooks/useAuth';
 import { SessionTimer } from './components/SessionTimer';
+import { VersionSelector } from './components/VersionSelector';
 import logo from '../../dist/client/mineflare-logo.png';
 
 try {
@@ -24,7 +25,7 @@ export function App() {
   const isDebugMode = new URLSearchParams(window.location.search).get('debug') === 'true';
   
   // Only start polling server data when authenticated
-  const { status, players, info, plugins, loading, error, serverState, startupStep, startServer, stopServer, refresh, togglePlugin } = useServerData(auth.authenticated);
+  const { status, players, info, plugins, loading, error, serverState, startupStep, serverVersion, supportedVersions, canChangeVersion, startServer, stopServer, refresh, togglePlugin, updateVersion } = useServerData(auth.authenticated);
 
   // Show login overlay if not authenticated
   if (!auth.authenticated) {
@@ -492,8 +493,16 @@ export function App() {
           <ServerStatus status={status} info={info} serverState={serverState} startupStep={startupStep} />
           <Plugins plugins={plugins} serverState={serverState} onPluginToggle={togglePlugin} />
           
-          {/* Second Row: Session Timer and Players Online (50/50) */}
+          {/* Second Row: Version Selector and Session Timer (50/50) */}
+          <VersionSelector 
+            currentVersion={serverVersion} 
+            supportedVersions={supportedVersions} 
+            serverState={serverState}
+            onVersionChange={updateVersion}
+          />
           <SessionTimer serverState={serverState} />
+          
+          {/* Third Row: Players Online (full width or fit) */}
           <PlayerList players={players} />
         </div>
 

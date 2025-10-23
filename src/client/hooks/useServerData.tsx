@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import type { ServerStatus, PlayerResponse, ServerInfo, Plugin } from '../types/api';
+import type { ServerStatus, PlayerResponse, ServerInfo, Plugin, VersionResponse, SupportedVersion } from '../types/api';
 import { fetchWithAuth } from '../utils/api';
 
 type ServerState = 'stopped' | 'starting' | 'running' | 'stopping';
@@ -13,6 +13,13 @@ export function useServerData(isAuthenticated: boolean) {
   const [error, setError] = useState<string | null>(null);
   const [serverState, setServerState] = useState<ServerState>('stopped');
   const [startupStep, setStartupStep] = useState<string | null>(null);
+  const [serverVersion, setServerVersion] = useState<string>('1.21.8');
+  const [supportedVersions, setSupportedVersions] = useState<SupportedVersion[]>([
+    { version: '1.21.7', label: 'legacy' },
+    { version: '1.21.8', label: 'stable' },
+    { version: '1.21.10', label: 'experimental' },
+  ]);
+  const [canChangeVersion, setCanChangeVersion] = useState(false);
   
   // Track active fetch calls for concurrency safety
   const activeFetches = useRef<Set<Promise<any>>>(new Set());
@@ -229,6 +236,42 @@ export function useServerData(isAuthenticated: boolean) {
     }
   }, []);
 
+  const fetchVersion = useCallback(async () => {
+    try {
+      const response = await fetchWithAuth('/api/version');
+      const data = await response.json() as VersionResponse;
+      setServerVersion(data.version);
+      setSupportedVersions(data.supported);
+      setCanChangeVersion(data.canChange);
+    } catch (err) {
+      console.error('Failed to fetch version:', err);
+    }
+  }, []);
+
+  const updateVersion = useCallback(async (version: string) => {
+    try {
+      const response = await fetchWithAuth('/api/version', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ version }),
+      });
+      
+      const result = await response.json() as { success: boolean; version?: string; error?: string };
+      
+      if (result.success && result.version) {
+        setServerVersion(result.version);
+        await fetchVersion(); // Refresh version data
+      } else {
+        throw new Error(result.error || 'Failed to update version');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update version');
+      throw err;
+    }
+  }, [fetchVersion]);
+
   useEffect(() => {
     // Only poll if authenticated
     if (!isAuthenticated) {
@@ -238,6 +281,7 @@ export function useServerData(isAuthenticated: boolean) {
     // Check server state immediately on mount
     poll();
     fetchPlugins();
+    fetchVersion();
 
     // Set up single unified polling interval
     const pollInterval = setInterval(() => {
@@ -250,7 +294,7 @@ export function useServerData(isAuthenticated: boolean) {
     return () => {
       clearInterval(pollInterval);
     };
-  }, [isAuthenticated, poll, fetchPlugins]);
+  }, [isAuthenticated, poll, fetchPlugins, fetchVersion]);
 
   return {
     status,
@@ -261,10 +305,14 @@ export function useServerData(isAuthenticated: boolean) {
     error,
     serverState,
     startupStep,
+    serverVersion,
+    supportedVersions,
+    canChangeVersion,
     startServer,
     stopServer,
     refresh,
     fetchPlugins,
-    togglePlugin
+    togglePlugin,
+    updateVersion,
   };
 }

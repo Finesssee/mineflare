@@ -36,14 +36,30 @@ The Cloudflare free tier is not supported for Containers so you have an account 
 
 <img width="850" height="475" alt="image" src="https://github.com/user-attachments/assets/2af59c0c-c5e0-485f-b8ba-1af472dd9094" />
 
+## 🎮 Minecraft Version Support
+
+Mineflare supports multiple Paper Minecraft versions in a single deployment:
+
+- **1.21.7** (Legacy) - Older stable release for maximum compatibility
+- **1.21.8** (Stable) - Recommended for most users, default version
+- **1.21.10** (Experimental) - Latest features, may have stability issues
+
+**Switching Versions:**
+1. Stop your server using the "Stop Server" button
+2. Select your desired version in the "Minecraft Version" panel
+3. Click to switch (takes a few seconds)
+4. Start your server - it will boot with the new version
+
+⚠️ **Important:** Always backup your world before switching versions. Downgrading versions may not be fully supported and could cause world compatibility issues.
 
 ## ✨ Features
 
 - **🚀 Serverless Infrastructure** - Built on Cloudflare Workers, Containers, Durable Objects and R2
-- **🎮 Full Minecraft Server** - Paper server with plugin support
+- **🎮 Full Minecraft Server** - Paper server with multi-version support (1.21.7, 1.21.8, 1.21.10)
+- **🔄 Version Selector** - Switch between Legacy, Stable, and Experimental Minecraft versions without losing data
 - **🗺️ Live Mini-Map** - Integrated web Mini-Map on R2 storage
 - **🔐 Authentication** - Secure cookie-based auth with encrypted tokens
-- **💻 Web Terminal** - Real-time Minecrat control console via WebSocket
+- **💻 Web Terminal** - Real-time Minecraft control console via WebSocket
 - **🔌 Plugin Management** - Enable/disable plugins through web UI
 - **💤 Auto-Sleep** - Containers sleep after 20 minutes of inactivity to save resources
 - **📊 Real-time Monitoring** - Server status, player list, and performance metrics
@@ -132,11 +148,14 @@ ALCHEMY_PASSWORD=your_secure_password
 
 ### Container Settings
 
-Edit `src/container.ts` to customize:
+Configure via the web UI:
+- **Minecraft Version** - Switch between 1.21.7 (Legacy), 1.21.8 (Stable), 1.21.10 (Experimental)
+- **Plugin Management** - Enable/disable optional plugins when server is stopped
+
+Advanced settings in `src/container.ts`:
 - `sleepAfter` - Auto-sleep timeout (default: 20 minutes)
-- `maxPlayers` - Maximum concurrent players
-- `serverVersion` - Minecraft server version
-- Plugin configurations
+- `INIT_MEMORY` / `MAX_MEMORY` - Server memory allocation (default: 5G/11G)
+- Plugin environment variable configurations
 
 ## 🔌 Plugin System
 
@@ -157,7 +176,12 @@ Instructions coming soon....
 bun run build
 
 # Build container services including HTTP proxy binary and File server binary
-./container_src/build-container-services.sh
+./docker_src/build-container-services.sh
+
+# Build single multi-version container image with all Paper versions
+# Includes 1.21.7, 1.21.8, and 1.21.10 in one image
+# Builds for both amd64 and arm64 architectures
+bun ./docker_src/build.ts
 
 # Destroy deployed resources
 bun run destroy
@@ -165,6 +189,18 @@ bun run destroy
 # Show Alchemy version
 bun run version
 ```
+
+### Container Build Process
+
+The container build system (`docker_src/build.ts`) creates a single multi-version image:
+
+- Builds one container image containing all three Paper versions (1.21.7, 1.21.8, 1.21.10)
+- Multi-platform support (linux/amd64, linux/arm64)
+- Includes version-specific Dynmap plugins for all Paper versions
+- Uses Docker buildx with registry caching for fast rebuilds
+- Caches build state to skip unnecessary rebuilds
+- The `VERSION` environment variable selects which Paper version runs at container startup
+- Image tag is written to `.BASE_DOCKERFILE` for Alchemy
 
 ## 📚 Documentation
 

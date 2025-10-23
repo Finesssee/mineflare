@@ -211,6 +211,79 @@ const elysiaApp = (
   })
 
   /**
+   * Get the current Minecraft server version configuration
+   */
+  .get("/version", async ({ request }) => {
+    try {
+      const container = getMinecraftContainer(request);
+      const { version } = await container.getServerVersion();
+      const status = await container.getStatus();
+      
+      // Version labels
+      const versionLabels: Record<string, "legacy" | "stable" | "experimental"> = {
+        "1.21.7": "legacy",
+        "1.21.8": "stable",
+        "1.21.10": "experimental",
+      };
+      
+      const supported = [
+        { version: "1.21.7", label: "legacy" as const },
+        { version: "1.21.8", label: "stable" as const },
+        { version: "1.21.10", label: "experimental" as const },
+      ];
+      
+      return {
+        version,
+        label: versionLabels[version] || "unknown",
+        supported,
+        canChange: status === 'stopped'
+      };
+    } catch (error) {
+      console.error("Failed to get version:", error);
+      return { 
+        version: "1.21.8", 
+        label: "stable",
+        supported: [
+          { version: "1.21.7", label: "legacy" as const },
+          { version: "1.21.8", label: "stable" as const },
+          { version: "1.21.10", label: "experimental" as const },
+        ],
+        canChange: false,
+        error: "Failed to get version" 
+      };
+    }
+  })
+
+  /**
+   * Set the Minecraft server version (only allowed when stopped)
+   */
+  .post("/version", async ({ body, request }: any) => {
+    try {
+      const { version } = body as { version: string };
+      
+      if (!version || typeof version !== 'string') {
+        return { success: false, error: "Version parameter is required" };
+      }
+      
+      const container = getMinecraftContainer(request);
+      const status = await container.getStatus();
+      
+      if (status !== 'stopped') {
+        return { success: false, error: "Server must be stopped to change version" };
+      }
+      
+      const result = await container.setServerVersion({ version });
+      return result;
+    } catch (error) {
+      console.error("Failed to set version:", error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : "Failed to set version" 
+      };
+    }
+  })
+
+  /**
    * Execute an RCON command on the Minecraft server
    */
   .post("/rcon/execute", async ({ body, request }: any) => {
