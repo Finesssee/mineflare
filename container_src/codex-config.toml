@@ -1,0 +1,35 @@
+# Codex CLI Configuration for Maximum Autonomy
+
+# Approval policy: never require approval for any actions
+# Options: untrusted, on-failure, on-request, never
+approval_policy = "never"
+
+# Sandbox mode: full system access
+# Options: read-only, workspace-write, danger-full-access
+sandbox_mode = "danger-full-access"
+
+# History persistence
+[history]
+persistence = "save-all"
+
+# Tool enablement
+[tools]
+web_search = true  # Enable web search capability
+view_image = true  # Enable viewing images from workspace
+
+# Reasoning display - show reasoning for transparency
+hide_agent_reasoning = false
+show_raw_agent_reasoning = false
+
+# Model reasoning configuration
+model_reasoning_effort = "high"
+model_reasoning_summary = "concise"
+model_verbosity = "high"
+
+# Experimental features
+experimental_use_exec_command_tool = true
+
+# TUI settings
+[tui]
+notifications = false  # Disable notifications for cleaner terminal experience
+

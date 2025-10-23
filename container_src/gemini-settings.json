@@ -1,0 +1,41 @@
+{
+  "general": {
+    "disableUpdateNag": true,
+    "disableAutoUpdate": false,
+    "vimMode": false,
+    "checkpointing": {
+      "enabled": true,
+      "directory": "/data/.local/gemini/checkpoints"
+    },
+    "sessionRetention": {
+      "enabled": true
+    },
+    "enablePromptCompletion": true
+  },
+  "tools": {
+    "approvalMode": "yolo",
+    "autoFix": true
+  },
+  "sandbox": {
+    "enabled": false
+  },
+  "ui": {
+    "hideTips": false,
+    "hideBanner": false,
+    "hideFooter": false,
+    "showStatusInTitle": true,
+    "showCitations": true,
+    "footer": {
+      "hideCWD": false,
+      "hideSandboxStatus": true,
+      "hideModelInfo": false
+    }
+  },
+  "output": {
+    "format": "text"
+  },
+  "privacy": {
+    "usageStatisticsEnabled": false
+  }
+}
+
