@@ -100,6 +100,8 @@ if (buildServicesHash && existsSync(BUILD_SERVICES_CACHE_FILE)) {
             "./gemini-arm64",
             "./chrome-x64.tar.gz",
             "./chrome-arm64.tar.gz",
+            "./mineflayer-x64",
+            "./mineflayer-arm64",
         ];
         
         const allBinariesExist = requiredBinaries.every(binary => existsSync(binary));

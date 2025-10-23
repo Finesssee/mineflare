@@ -555,6 +555,57 @@ download_chrome() {
     return 0
 }
 
+# Function to download Mineflayer binaries
+download_mineflayer() {
+    local log_file="$LOG_DIR/mineflayer.log"
+    {
+        echo "=== Downloading Mineflayer binaries ==="
+        
+        REPO="eastlondoner/mineflare-cli"
+        
+        echo "Getting latest Mineflayer version..."
+        MINEFLAYER_VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+        
+        if [ -z "$MINEFLAYER_VERSION" ]; then
+            echo "✗ Failed to get latest Mineflayer version!"
+            return 1
+        fi
+        
+        echo "Latest Mineflayer version: $MINEFLAYER_VERSION"
+        
+        echo "Downloading mineflayer-linux-x64..."
+        MINEFLAYER_URL_X64="https://github.com/$REPO/releases/download/${MINEFLAYER_VERSION}/mineflayer-x86_64-unknown-linux-gnu"
+        if curl -fsSL -o mineflayer-x64 "$MINEFLAYER_URL_X64"; then
+            echo "✓ Downloaded mineflayer-x64"
+            chmod +x mineflayer-x64
+            ls -lh ./mineflayer-x64
+        else
+            echo "✗ Failed to download mineflayer-x64!"
+            return 1
+        fi
+        
+        echo "Downloading mineflayer-linux-arm64..."
+        MINEFLAYER_URL_ARM64="https://github.com/$REPO/releases/download/${MINEFLAYER_VERSION}/mineflayer-aarch64-unknown-linux-gnu"
+        if curl -fsSL -o mineflayer-arm64 "$MINEFLAYER_URL_ARM64"; then
+            echo "✓ Downloaded mineflayer-arm64"
+            chmod +x mineflayer-arm64
+            ls -lh ./mineflayer-arm64
+        else
+            echo "✗ Failed to download mineflayer-arm64!"
+            return 1
+        fi
+        
+        echo "✓ Mineflayer download completed successfully"
+    } &> "$log_file"
+    
+    if [ $? -ne 0 ]; then
+        cat "$log_file"
+        return 1
+    fi
+    cat "$log_file"
+    return 0
+}
+
 echo ""
 echo "Starting parallel builds and downloads..."
 echo ""
@@ -584,9 +635,12 @@ PID_GEMINI=$!
 ( download_chrome || download_chrome ) &
 PID_CHROME=$!
 
+( download_mineflayer || download_mineflayer ) &
+PID_MINEFLAYER=$!
+
 # Wait for all tasks and collect exit codes (bash 3.2 compatible)
-PIDS=($PID_HTTP_PROXY $PID_FILE_SERVER $PID_HTEETP $PID_TTYD $PID_CLAUDE $PID_CODEX $PID_GEMINI $PID_CHROME)
-TASK_NAMES=("HTTP Proxy build" "File Server build" "hteetp download" "ttyd download" "Claude Code download" "Codex download" "Gemini CLI build" "Chrome download")
+PIDS=($PID_HTTP_PROXY $PID_FILE_SERVER $PID_HTEETP $PID_TTYD $PID_CLAUDE $PID_CODEX $PID_GEMINI $PID_CHROME $PID_MINEFLAYER)
+TASK_NAMES=("HTTP Proxy build" "File Server build" "hteetp download" "ttyd download" "Claude Code download" "Codex download" "Gemini CLI build" "Chrome download" "Mineflayer download")
 TASK_STATUS=()
 
 # Wait for each task and collect status
@@ -614,6 +668,7 @@ if [ ${#FAILED_TASKS[@]} -eq 0 ]; then
     echo "  - codex-x64, codex-arm64"
     echo "  - gemini-x64, gemini-arm64"
     echo "  - chrome-x64, chrome-arm64"
+    echo "  - mineflayer-x64, mineflayer-arm64"
     exit 0
 else
     echo "✗ The following tasks failed:"

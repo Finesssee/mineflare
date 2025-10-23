@@ -87,6 +87,7 @@ COPY --chmod=755 \
     claude-x64 claude-arm64 \
     codex-x64 codex-arm64 \
     gemini-x64 gemini-arm64 \
+    mineflayer-x64 mineflayer-arm64 \
     /tmp/
 
 # Copy all Chrome binaries to a temporary location. We will select the correct one for the
@@ -113,6 +114,7 @@ RUN set -eux; \
     mv "/tmp/claude-$arch_suffix" /usr/local/bin/claude; \
     mv "/tmp/codex-$arch_suffix" /usr/local/bin/codex; \
     mv "/tmp/gemini-$arch_suffix" /usr/local/bin/gemini; \
+    mv "/tmp/mineflayer-$arch_suffix" /usr/local/bin/mineflayer; \
     mkdir -p /opt/chrome; \
     tar -xzf "/tmp/chrome-$arch_suffix.tar.gz" -C /opt/chrome; \
     chmod -R 755 /opt/chrome; \
