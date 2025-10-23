@@ -182,3 +182,4 @@ lerna-debug.log*
 # Local build cache
 docker_src/.BUILD_CONTAINER_SERVICES
 docker_src/chrome-*
+docker_src/mineflare-*
