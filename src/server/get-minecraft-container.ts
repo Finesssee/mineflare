@@ -9,7 +9,7 @@ import { AsyncLocalStorage } from "async_hooks";
 
 
 const env = workerEnv as typeof worker.Env;
-const singletonContainerId = "minecraft-singleton-container";
+const singletonContainerId = "mineflare-singleton-container";
 
 export const asyncLocalStorage = new AsyncLocalStorage<{ cf: CfProperties | undefined }>();
 

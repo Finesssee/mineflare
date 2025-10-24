@@ -6,8 +6,6 @@ import cors from "@elysiajs/cors";
 import { getNodeEnv } from "./client/utils/node-env";
 import { asyncLocalStorage, getMinecraftContainer } from "./server/get-minecraft-container";
 import { authApp, requireAuth, decryptToken, getSymKeyCached } from "./server/auth";
-import { AsyncLocalStorage } from "async_hooks";
-import { CfProperties } from "@cloudflare/workers-types";
 
 const env = workerEnv as typeof worker.Env;
 
