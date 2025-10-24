@@ -7,7 +7,7 @@
     "build": "bun ./docker_src/build.ts && bun run build:mcp-components && bun build:worker",
     "build:worker": "tsc -b",
     "build:mcp-components": "bun run src/mcp-components/build-all.ts",
-    "build:offline": "MINEFLARE_OFFLINE=true bun build",
+    "build:offline": "MINEFLARE_OFFLINE=true bun run build",
     "configure": "alchemy configure",
     "version": "alchemy --version",
     "login": "alchemy login",

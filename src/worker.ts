@@ -4,8 +4,10 @@ import { CloudflareAdapter } from 'elysia/adapter/cloudflare-worker'
 import { env as workerEnv } from 'cloudflare:workers'
 import cors from "@elysiajs/cors";
 import { getNodeEnv } from "./client/utils/node-env";
-import { getMinecraftContainer } from "./server/get-minecraft-container";
+import { asyncLocalStorage, getMinecraftContainer } from "./server/get-minecraft-container";
 import { authApp, requireAuth, decryptToken, getSymKeyCached } from "./server/auth";
+import { AsyncLocalStorage } from "async_hooks";
+import { CfProperties } from "@cloudflare/workers-types";
 
 const env = workerEnv as typeof worker.Env;
 
@@ -31,7 +33,7 @@ const elysiaApp = (
   .get("/", () => 'foo')
   .get("/logs", async ({ request }) => {
     console.log("Getting container");
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       // This is the only endpoint that starts the container! But also it cannot be used if the container is shutting down.
       const state = await container.getStatus();
       if(state !== "running") {
@@ -48,7 +50,7 @@ const elysiaApp = (
   .get("/status", async ({ request }) => {
     try {
       console.log("Getting container");
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       // This is the only endpoint that starts the container! But also it cannot be used if the container is shutting down.
       const state = await container.getStatus();
       if(state === "stopping") {
@@ -73,7 +75,7 @@ const elysiaApp = (
    */
   .get("/players", async ({ request}) => {
     try {
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const response = await container.fetch(new Request("http://localhost/rcon/players"));
       const data = await response.json();
       return data;
@@ -108,7 +110,7 @@ const elysiaApp = (
    */
   .get("/info", async ({ request }) => {
     try {
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const response = await container.fetch(new Request("http://localhost/rcon/info"));
       const info = await response.json();
       return info;
@@ -128,7 +130,7 @@ const elysiaApp = (
    * Get the state of the container ("running" | "stopping" | "stopped" | "healthy" | "stopped_with_code"). This does not wake the container.
    */
   .get("/getState", async ({ request }) => {
-    const container = getMinecraftContainer(request);
+    const container = getMinecraftContainer();
     // lastChange: number
     // status: "running" | "stopping" | "stopped" | "healthy" | "stopped_with_code"
     const { lastChange } = await container.getState();
@@ -146,7 +148,7 @@ const elysiaApp = (
         return { success: false, error: "URL is required" };
       }
 
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const result = await container.navigateBrowser(url);
       return result;
     } catch (error) {
@@ -164,7 +166,7 @@ const elysiaApp = (
    */
   .get("/plugins", async ({ request }) => {
     try{
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const plugins = await container.getPluginState();
       return { plugins };
     } catch (error) {
@@ -179,7 +181,7 @@ const elysiaApp = (
    */
   .post("/plugins/:filename", async ({ params, body, request }: any) => {
     try {
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const { filename } = params;
       const { enabled, env } = body as { enabled?: boolean; env?: Record<string, string> };
       
@@ -215,7 +217,7 @@ const elysiaApp = (
    */
   .get("/version", async ({ request }) => {
     try {
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const { version } = await container.getServerVersion();
       const status = await container.getStatus();
       
@@ -265,7 +267,7 @@ const elysiaApp = (
         return { success: false, error: "Version parameter is required" };
       }
       
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const status = await container.getStatus();
       
       if (status !== 'stopped') {
@@ -299,7 +301,7 @@ const elysiaApp = (
         };
       }
 
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const result = await container.executeRconCommand(command);
       return result;
     } catch (error) {
@@ -315,7 +317,7 @@ const elysiaApp = (
   
   .post("/shutdown", async ({ request }) => {
     try {
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       console.error("Shutting down container");
       await container.stop();
       console.error("Container shut down");
@@ -337,7 +339,7 @@ const elysiaApp = (
    */
   .get("/session/current", async ({ request }) => {
     try {
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const session = await container.getCurrentSession();
       return session;
     } catch (error) {
@@ -351,7 +353,7 @@ const elysiaApp = (
    */
   .get("/session/last", async ({ request }) => {
     try {
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const session = await container.getLastSession();
       return session || { error: "No previous sessions" };
     } catch (error) {
@@ -365,7 +367,7 @@ const elysiaApp = (
    */
   .get("/session/stats", async ({ request }) => {
     try {
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const stats = await container.getUsageStats();
       return stats;
     } catch (error) {
@@ -375,7 +377,7 @@ const elysiaApp = (
   })
   .get("/startup-status", async ({ request }) => {
     try {
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const response = await container.fetch(new Request("http://localhost/startup-status"));
       const data = await response.json();
       return data;
@@ -461,62 +463,65 @@ function validateWebSocketUpgrade(request: Request): Response | null {
   return null;
 }
 
+
 export default {
   async fetch(request: Request, _env: typeof worker.Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // auth methods do not require auth - but browser/terminal HTML pages DO require auth
-    // Only skip auth for WebSocket upgrades (ws protocol or /ws path with Upgrade header)
-    const isWebSocketUpgrade = url.protocol.startsWith('ws') || 
-                               (url.pathname.startsWith('/ws') && request.headers.get('Upgrade') === 'websocket') ||
-                               ((url.pathname.startsWith('/src/terminal/') || url.pathname.startsWith('/src/browser/')) && request.headers.get('Upgrade') === 'websocket');
-    
-    const skipAuth = request.method === 'OPTIONS' || url.pathname.startsWith('/auth/') || isWebSocketUpgrade
+    return asyncLocalStorage.run({ cf: request.cf }, async () => {
+      // auth methods do not require auth - but browser/terminal HTML pages DO require auth
+      // Only skip auth for WebSocket upgrades (ws protocol or /ws path with Upgrade header)
+      const isWebSocketUpgrade = url.protocol.startsWith('ws') || 
+                                (url.pathname.startsWith('/ws') && request.headers.get('Upgrade') === 'websocket') ||
+                                ((url.pathname.startsWith('/src/terminal/') || url.pathname.startsWith('/src/browser/')) && request.headers.get('Upgrade') === 'websocket');
+      
+      const skipAuth = request.method === 'OPTIONS' || url.pathname.startsWith('/auth/') || isWebSocketUpgrade
 
-    if (!skipAuth) {
-      const authError = await requireAuth(request);
-      if (authError) {
-        return authError;
+      if (!skipAuth) {
+        const authError = await requireAuth(request);
+        if (authError) {
+          return authError;
+        }
       }
-    }
 
-    // Handle WebSocket requests (terminal, browser, and RCON)
-    const upgradeHeader = request.headers.get("Upgrade");
-    const isWebSocketRequest = upgradeHeader === "websocket" && (
-      url.protocol.startsWith('ws') || 
-      url.pathname.startsWith('/ws') || 
-      url.pathname.endsWith('/ws') ||
-      (url.pathname.startsWith('/src/terminal/') && url.pathname.includes('/ws')) ||
-      (url.pathname.startsWith('/src/browser/') && url.pathname.includes('/ws'))
-    );
-    
-    if (isWebSocketRequest || (request.method === 'OPTIONS' && url.pathname.includes('/ws'))) {
-      console.error('websocket request', request.url);
-      return this.handleWebSocket(request, url.pathname);
-    }
-
-    if(request.method === 'OPTIONS') {
-      try {
-        console.error('options request', request.url);
-        const response = await app.fetch(request);
-        console.error('options response', response.headers);
-        response.headers.set('Access-Control-Allow-Origin', request.headers.get('Origin') || '*');
-        response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie');
-        response.headers.set('Access-Control-Allow-Credentials', 'true');
-        response.headers.set('Access-Control-Max-Age', '86400');
-        return response;
-      } catch (error) {
-        console.error('options error', error);
-        return new Response(null, {
-          status: 500,
-          headers: {
-            'Content-Type': 'text/plain',
-          },
-        });
+      // Handle WebSocket requests (terminal, browser, and RCON)
+      const upgradeHeader = request.headers.get("Upgrade");
+      const isWebSocketRequest = upgradeHeader === "websocket" && (
+        url.protocol.startsWith('ws') || 
+        url.pathname.startsWith('/ws') || 
+        url.pathname.endsWith('/ws') ||
+        (url.pathname.startsWith('/src/terminal/') && url.pathname.includes('/ws')) ||
+        (url.pathname.startsWith('/src/browser/') && url.pathname.includes('/ws'))
+      );
+      
+      if (isWebSocketRequest || (request.method === 'OPTIONS' && url.pathname.includes('/ws'))) {
+        console.error('websocket request', request.url);
+        return this.handleWebSocket(request, url.pathname);
       }
-    }
-    return app.fetch(request);
+
+      if(request.method === 'OPTIONS') {
+        try {
+          console.error('options request', request.url);
+          const response = await app.fetch(request);
+          console.error('options response', response.headers);
+          response.headers.set('Access-Control-Allow-Origin', request.headers.get('Origin') || '*');
+          response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+          response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie');
+          response.headers.set('Access-Control-Allow-Credentials', 'true');
+          response.headers.set('Access-Control-Max-Age', '86400');
+          return response;
+        } catch (error) {
+          console.error('options error', error);
+          return new Response(null, {
+            status: 500,
+            headers: {
+              'Content-Type': 'text/plain',
+            },
+          });
+        }
+      }
+      return app.fetch(request);
+    });
   },
 
   async handleWebSocket(request: Request, pathname: string): Promise<Response> {
@@ -549,7 +554,7 @@ export default {
 
     // Token is valid, route to appropriate WebSocket endpoint
     try {
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       
       if (pathname.startsWith('/src/browser/')) {
         console.error("Forwarding WebSocket to embedded browser (noVNC)");

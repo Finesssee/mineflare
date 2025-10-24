@@ -4,20 +4,24 @@ import {
 } from "cloudflare:workers";
 import { worker } from "../../alchemy.run";
 import type { ContinentCode } from "@cloudflare/workers-types";
-import { getContainer } from "@cloudflare/containers";
 import type { DurableObjectLocationHint } from "@cloudflare/workers-types";
+import { AsyncLocalStorage } from "async_hooks";
 
 
 const env = workerEnv as typeof worker.Env;
 const singletonContainerId = "cf-singleton-container";
 
-export function getMinecraftContainer(request: Request) {
-    
+export const asyncLocalStorage = new AsyncLocalStorage<{ cf: CfProperties | undefined }>();
 
-   const locationHint = getLocationHint(request);
-   console.log("setting location hint to", locationHint, "based on request", request.cf);
-
+export function getMinecraftContainer() {
     const containerId = env.MINECRAFT_CONTAINER.idFromName(singletonContainerId);
+    const cf = asyncLocalStorage.getStore()?.cf;
+    if(!cf) {
+        console.log("No cf object found in async local storage. Skipping location hint.");
+        return env.MINECRAFT_CONTAINER.get(containerId);
+    }
+    const locationHint = getLocationHint(cf);
+    console.log("setting location hint to", locationHint, "based on request");
     return env.MINECRAFT_CONTAINER.get(containerId, { locationHint });
 }
 
@@ -46,42 +50,46 @@ function exhaustiveCheck(value: never): never {
  * @returns The location hint
  * @see https://developers.cloudflare.com/workers/runtime-apis/request/#requestcf for info on the request.cf object
  */
-function getLocationHint(request: Request): DurableObjectLocationHint {
-    
-   /**
-   * Longitude of the incoming request
-   *
-   * @example "-97.74260"
-   */
-  const longitude = typeof request.cf?.longitude === "string" ? parseFloat(request.cf.longitude) : typeof request.cf?.longitude === "number" ? request.cf.longitude : undefined;
-    const cfParams = request.cf?.continent as ContinentCode | undefined;
-    switch(cfParams) {
-        case "AF":
-            return "afr";
-        case "AN":
-            return "sam";
-        case "AS":
-            if(longitude && longitude < 60) {
-                return "me";
-            }
-            return "apac";
-        case "EU":
-            if(longitude && longitude > 17) {
-                return "eeur";
-            }
-            return "weur";
-        case "NA":
-            if(longitude && longitude > -95) {
+function getLocationHint(cf: CfProperties): DurableObjectLocationHint | undefined {
+    try {
+        /**
+         * Longitude of the incoming request
+         *
+         * @example "-97.74260"
+         */
+        const longitude = typeof cf.longitude === "string" ? parseFloat(cf.longitude) : typeof cf.longitude === "number" ? cf.longitude : undefined;
+        const cfParams = cf.continent as ContinentCode | undefined;
+        switch(cfParams) {
+            case "AF":
+                return "afr";
+            case "AN":
+                return "sam";
+            case "AS":
+                if(longitude && longitude < 60) {
+                    return "me";
+                }
+                return "apac";
+            case "EU":
+                if(longitude && longitude > 17) {
+                    return "eeur";
+                }
+                return "weur";
+            case "NA":
+                if(longitude && longitude > -95) {
+                    return "enam";
+                }
+                return "wnam";
+            case "OC":
+                return "oc";
+            case "SA":
+                return "sam";
+            case undefined:
                 return "enam";
-            }
-            return "wnam";
-        case "OC":
-            return "oc";
-        case "SA":
-            return "sam";
-        case undefined:
-            return "enam";
-        default:
-            exhaustiveCheck(cfParams);
+            default:
+                exhaustiveCheck(cfParams);
+        }
+    } catch (error) {
+        console.error("Error getting location hint", error);
+        return undefined;
     }
 }

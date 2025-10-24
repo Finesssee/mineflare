@@ -105,7 +105,7 @@ async function getPasswordSetCached(request: Request): Promise<boolean> {
   }
   
   // Fall back to Durable Object
-  const container = getMinecraftContainer(request);
+  const container = getMinecraftContainer();
   const isPasswordSet = await container.isPasswordSet();
   
   // Seed the cache for future requests
@@ -135,7 +135,7 @@ async function getSymKeyCached(request: Request): Promise<string | null> {
   }
   
   // Fall back to Durable Object
-  const container = getMinecraftContainer(request);
+  const container = getMinecraftContainer();
   const { symKey } = await container.getSymmetricKey();
   if (!symKey) return null;
   
@@ -275,7 +275,7 @@ export const authApp = (
         });
       }
       
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       // When in reset mode, clear existing auth to allow re-setup
       if (isResetMode()) {
         await container.clearAuth();
@@ -364,7 +364,7 @@ export const authApp = (
         });
       }
       
-      const container = getMinecraftContainer(request);
+      const container = getMinecraftContainer();
       const result = await container.verifyPassword({ password });
       
       if (!result.ok) {
