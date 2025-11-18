@@ -2,6 +2,8 @@
 .alchemy/
 .specstory/
 /.worktrees/
+AGENTS.md
+CLAUDE.md
 
 # Dependencies
 node_modules/
