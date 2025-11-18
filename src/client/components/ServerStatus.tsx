@@ -1,9 +1,9 @@
-import type { ServerStatus, ServerInfo } from '../types/api';
+import type { ServerStatus, ServerInfo, ServerState } from '../types/api';
 
 interface Props {
   status: ServerStatus | null;
   info: ServerInfo | null;
-  serverState?: 'stopped' | 'starting' | 'running' | 'stopping';
+  serverState?: ServerState;
   startupStep?: string | null;
 }
 
@@ -153,6 +153,79 @@ export function ServerStatus({ status, info, serverState, startupStep }: Props) 
           textAlign: 'center',
         }}>
           Shutting down gracefully...
+        </div>
+      </div>
+    );
+  }
+
+  if (serverState === 'maintenance') {
+    return (
+      <div style={{
+        background: 'rgba(30, 28, 12, 0.45)',
+        backdropFilter: 'blur(10px)',
+        border: '1px solid rgba(255, 182, 0, 0.18)',
+        borderRadius: '16px',
+        padding: '32px',
+        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+      }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          marginBottom: '24px',
+        }}>
+          <div style={{
+            width: '48px',
+            height: '48px',
+            borderRadius: '12px',
+            background: 'linear-gradient(135deg, #FFC933 0%, #FFB347 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '1.5rem',
+            marginRight: '16px',
+            boxShadow: '0 4px 12px rgba(255, 182, 0, 0.3)',
+          }}>
+            🛠️
+          </div>
+          <div>
+            <h2 style={{
+              margin: '0 0 4px 0',
+              fontSize: '1.5rem',
+              fontWeight: '700',
+              color: '#fff',
+            }}>
+              Maintenance Mode
+            </h2>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}>
+              <div style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: '#FFB600',
+                boxShadow: '0 0 8px #FFB600',
+              }} />
+              <span style={{
+                color: '#FFB600',
+                fontWeight: '600',
+                fontSize: '0.875rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}>
+                Installing modpack
+              </span>
+            </div>
+          </div>
+        </div>
+        <div style={{
+          color: '#E8D9A6',
+          fontSize: '0.95rem',
+          lineHeight: 1.6,
+        }}>
+          Minecraft is in maintenance while mods are being deployed. It will restart automatically when the installation is complete.
         </div>
       </div>
     );

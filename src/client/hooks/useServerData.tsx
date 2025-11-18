@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import type { ServerStatus, PlayerResponse, ServerInfo, Plugin, VersionResponse, SupportedVersion, ConnectionInfo } from '../types/api';
+import type { ServerStatus, PlayerResponse, ServerInfo, Plugin, VersionResponse, SupportedVersion, ConnectionInfo, ServerState } from '../types/api';
 import { fetchWithAuth } from '../utils/api';
-
-type ServerState = 'stopped' | 'starting' | 'running' | 'stopping';
 
 export function useServerData(isAuthenticated: boolean) {
   const [status, setStatus] = useState<ServerStatus | null>(null);
@@ -106,7 +104,7 @@ export function useServerData(isAuthenticated: boolean) {
               await fetchPlugins();
             }
             // If not online yet, stay in 'starting' state
-          } else if (!containerRunning && serverState === 'running') {
+          } else if (!containerRunning && (serverState === 'running' || serverState === 'maintenance')) {
             // Was running but now stopped externally
             setServerState('stopped');
             setStatus({ online: false, playerCount: 0, maxPlayers: 0 });
@@ -122,7 +120,7 @@ export function useServerData(isAuthenticated: boolean) {
             setServerState('starting');
             shouldFetchFullData.current = true;
             // Will fetch on next poll
-          } else if (!containerRunning && (serverState === 'running' || serverState === 'starting')) {
+          } else if (!containerRunning && (serverState === 'running' || serverState === 'starting' || serverState === 'maintenance')) {
             // Server stopped externally while we thought it was running
             setServerState('stopped');
             setStatus({ online: false, playerCount: 0, maxPlayers: 0 });

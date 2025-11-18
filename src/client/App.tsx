@@ -9,6 +9,7 @@ import { Login } from './components/Login';
 import { useAuth } from './hooks/useAuth';
 import { SessionTimer } from './components/SessionTimer';
 import { VersionSelector } from './components/VersionSelector';
+import { ModpackInstaller } from './components/ModpackInstaller';
 import logo from '../../dist/client/mineflare-logo.png';
 
 try {
@@ -252,6 +253,36 @@ export function App() {
               textAlign: 'center',
             }}>
               This may take up to 5 minutes
+            </p>
+          </div>
+        ) : serverState === 'maintenance' ? (
+          <div style={{
+            marginTop: '40px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '16px',
+          }}>
+            <div style={{
+              fontSize: 'clamp(1.125rem, 2.5vw, 1.5rem)',
+              fontWeight: '700',
+              padding: 'clamp(16px, 3vw, 24px) clamp(48px, 8vw, 80px)',
+              background: 'rgba(255, 201, 51, 0.15)',
+              color: '#FFC933',
+              border: '2px solid rgba(255, 201, 51, 0.3)',
+              borderRadius: '12px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+            }}>
+              🛠️ Maintenance Mode
+            </div>
+            <p style={{
+              fontSize: '0.9rem',
+              color: '#888',
+              margin: '0',
+              textAlign: 'center',
+            }}>
+              Modpack installation in progress. The server will restart automatically when finished.
             </p>
           </div>
         ) : serverState === 'stopping' ? (
@@ -511,7 +542,12 @@ export function App() {
           <SessionTimer serverState={serverState} />
           
           {/* Third Row: Players Online (full width or fit) */}
-          <PlayerList players={players} />
+          <div style={{ gridColumn: '1 / -1' }}>
+            <ModpackInstaller serverState={serverState} />
+          </div>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <PlayerList players={players} />
+          </div>
         </div>
 
         {/* Terminal (full width) */}

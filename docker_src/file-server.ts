@@ -32,6 +32,7 @@
 
 import { spawn } from "bun";
 import { file, S3Client } from "bun";
+import path from "node:path";
 
 const PORT = 8083;
 
@@ -84,6 +85,110 @@ interface ListBackupsResult {
   directory: string;
   backups: BackupListItem[];
 }
+
+type ModpackSource = 'modrinth' | 'curseforge';
+type ModpackJobStatus = 'pending' | 'downloading' | 'installing' | 'completed' | 'failed';
+
+interface ModpackJobProgress {
+  phase: string;
+  currentFile?: string;
+  currentIndex?: number;
+  totalFiles?: number;
+  note?: string;
+}
+
+interface ModpackJobResult {
+  loader?: 'PAPER' | 'FORGE' | 'FABRIC' | 'NEOFORGE';
+  minecraftVersion?: string;
+  profileSuggestion?: string;
+  packName?: string;
+  filesInstalled: number;
+  overridesApplied: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+interface ModpackJob {
+  id: string;
+  source: ModpackSource;
+  status: ModpackJobStatus;
+  startedAt: number;
+  updatedAt: number;
+  progress?: ModpackJobProgress;
+  error?: string;
+  result?: ModpackJobResult;
+}
+
+interface ModrinthInstallPayload {
+  url: string;
+  packVersion?: string;
+}
+
+interface CurseforgeInstallPayload {
+  projectId: number;
+  fileId: number;
+}
+
+interface ModrinthFileEntry {
+  path: string;
+  downloads: string[];
+  hashes?: Record<string, string>;
+  env?: {
+    server?: 'required' | 'optional' | 'unsupported';
+    client?: 'required' | 'optional' | 'unsupported';
+  };
+  fileSize?: number;
+}
+
+interface ModrinthManifest {
+  name?: string;
+  summary?: string;
+  dependencies?: Record<string, string>;
+  files: ModrinthFileEntry[];
+  overrides?: string;
+  versionId?: string;
+  project_id?: string;
+  projectId?: string;
+}
+
+interface CurseforgeManifest {
+  name?: string;
+  overrides?: string;
+  minecraft: {
+    version: string;
+    modLoaders: Array<{ id: string; primary?: boolean }>;
+  };
+  files: Array<{
+    projectID: number;
+    fileID: number;
+    required: boolean;
+  }>;
+}
+
+interface CurseforgePackInfo {
+  name: string;
+  fileName: string;
+  fileId: number;
+  downloadUrl: string;
+}
+
+const PROFILE_HINTS: Array<{ profileId: string; loader: 'PAPER' | 'FORGE' | 'FABRIC' | 'NEOFORGE'; minecraftVersion: string }> = [
+  { profileId: 'paper-1-21-10', loader: 'PAPER', minecraftVersion: '1.21.10' },
+  { profileId: 'paper-1-21-8', loader: 'PAPER', minecraftVersion: '1.21.8' },
+  { profileId: 'paper-1-21-7', loader: 'PAPER', minecraftVersion: '1.21.7' },
+  { profileId: 'paper-1-20-6', loader: 'PAPER', minecraftVersion: '1.20.6' },
+  { profileId: 'paper-1-19-4', loader: 'PAPER', minecraftVersion: '1.19.4' },
+  { profileId: 'forge-1-20-1', loader: 'FORGE', minecraftVersion: '1.20.1' },
+  { profileId: 'forge-1-19-2', loader: 'FORGE', minecraftVersion: '1.19.2' },
+  { profileId: 'forge-1-18-2', loader: 'FORGE', minecraftVersion: '1.18.2' },
+  { profileId: 'forge-1-16-5', loader: 'FORGE', minecraftVersion: '1.16.5' },
+  { profileId: 'neoforge-1-21-1', loader: 'NEOFORGE', minecraftVersion: '1.21.1' },
+  { profileId: 'neoforge-1-20-4', loader: 'NEOFORGE', minecraftVersion: '1.20.4' },
+  { profileId: 'neoforge-1-20-1', loader: 'NEOFORGE', minecraftVersion: '1.20.1' },
+  { profileId: 'fabric-1-21-1', loader: 'FABRIC', minecraftVersion: '1.21.1' },
+  { profileId: 'fabric-1-20-1', loader: 'FABRIC', minecraftVersion: '1.20.1' },
+  { profileId: 'fabric-1-19-2', loader: 'FABRIC', minecraftVersion: '1.19.2' },
+  { profileId: 'fabric-1-18-2', loader: 'FABRIC', minecraftVersion: '1.18.2' },
+];
 
 // Retry configuration
 const MAX_RETRIES = 3;
@@ -404,6 +509,7 @@ class FileServer {
     result?: { backup_path: string; size: number; note?: string };
     error?: string;
   }> = new Map();
+  private modpackJobs: Map<string, ModpackJob> = new Map();
 
   private jsonResponse(data: unknown, init?: { status?: number; headers?: Record<string, string> }): Response {
     const body = JSON.stringify(data);
@@ -414,6 +520,21 @@ class FileServer {
       ...(init?.headers || {}),
     };
     return new Response(body, { status: init?.status ?? 200, headers });
+  }
+
+  private isMaintenanceModeEnabled(): boolean {
+    return (process.env.MAINTENANCE_MODE || '').toLowerCase() === 'true';
+  }
+
+  private ensureMaintenanceModeEnabled() {
+    if (!this.isMaintenanceModeEnabled()) {
+      throw new Error('Maintenance mode must be enabled before installing a modpack. Stop the server and enter maintenance mode from the Mineflare dashboard.');
+    }
+  }
+
+  private generateJobId(source: ModpackSource): string {
+    const random = Math.random().toString(36).slice(2, 8);
+    return `${source}-${Date.now().toString(36)}-${random}`;
   }
 
   async start() {
@@ -456,6 +577,19 @@ class FileServer {
     this.requestCount++;
     
     const url = new URL(req.url);
+    if (req.method === 'GET' && url.pathname.startsWith('/modpack/status/')) {
+      const id = url.pathname.replace('/modpack/status/', '').trim();
+      if (!id) {
+        return this.jsonResponse({ error: 'Missing job id' }, { status: 400 });
+      }
+      return this.handleModpackStatus(id);
+    }
+    if (req.method === 'POST' && url.pathname === '/modpack/install/modrinth') {
+      return await this.handleModrinthInstall(req);
+    }
+    if (req.method === 'POST' && url.pathname === '/modpack/install/curseforge') {
+      return await this.handleCurseforgeInstall(req);
+    }
     // Background backup status endpoint
     if (url.pathname === "/backup-status") {
       const id = url.searchParams.get("id");
@@ -494,6 +628,104 @@ class FileServer {
     } else {
       return await this.handleFileServe(url.pathname);
     }
+  }
+
+  private async handleModpackStatus(id: string): Promise<Response> {
+    const job = this.modpackJobs.get(id);
+    if (!job) {
+      return this.jsonResponse({ id, status: 'not_found' }, { status: 404 });
+    }
+    return this.jsonResponse(job);
+  }
+
+  private async handleModrinthInstall(req: Request): Promise<Response> {
+    let payload: ModrinthInstallPayload;
+    try {
+      payload = await req.json();
+    } catch (error) {
+      return this.jsonResponse({ error: 'Invalid JSON body' }, { status: 400 });
+    }
+
+    const url = typeof payload?.url === 'string' ? payload.url.trim() : '';
+    const packVersion = typeof payload?.packVersion === 'string' ? payload.packVersion.trim() : undefined;
+
+    if (!url) {
+      return this.jsonResponse({ error: 'Missing Modrinth pack URL' }, { status: 400 });
+    }
+
+    try {
+      this.ensureMaintenanceModeEnabled();
+    } catch (error: any) {
+      return this.jsonResponse({ error: error?.message || 'Maintenance mode is required' }, { status: 400 });
+    }
+
+    const jobId = this.generateJobId('modrinth');
+    const job: ModpackJob = {
+      id: jobId,
+      source: 'modrinth',
+      status: 'pending',
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      progress: { phase: 'queued' },
+    };
+    this.modpackJobs.set(jobId, job);
+
+    this.processModrinthJob(job, { url, packVersion }).catch((error) => {
+      console.error('[FileServer] Modrinth install failed:', error);
+      job.status = 'failed';
+      job.error = error instanceof Error ? error.message : String(error);
+      job.progress = { phase: 'failed', note: job.error };
+      job.updatedAt = Date.now();
+    });
+
+    return this.jsonResponse({ id: jobId, status: job.status });
+  }
+
+  private async handleCurseforgeInstall(req: Request): Promise<Response> {
+    let payload: CurseforgeInstallPayload;
+    try {
+      payload = await req.json();
+    } catch (error) {
+      return this.jsonResponse({ error: 'Invalid JSON body' }, { status: 400 });
+    }
+
+    const projectId = Number(payload?.projectId);
+    const fileId = Number(payload?.fileId);
+
+    if (!Number.isFinite(projectId) || !Number.isFinite(fileId)) {
+      return this.jsonResponse({ error: 'projectId and fileId are required numeric values' }, { status: 400 });
+    }
+
+    try {
+      this.ensureMaintenanceModeEnabled();
+    } catch (error: any) {
+      return this.jsonResponse({ error: error?.message || 'Maintenance mode is required' }, { status: 400 });
+    }
+
+    if (!process.env.CURSEFORGE_API_KEY) {
+      return this.jsonResponse({ error: 'CURSEFORGE_API_KEY is not configured on the container' }, { status: 400 });
+    }
+
+    const jobId = this.generateJobId('curseforge');
+    const job: ModpackJob = {
+      id: jobId,
+      source: 'curseforge',
+      status: 'pending',
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      progress: { phase: 'queued' },
+    };
+    this.modpackJobs.set(jobId, job);
+
+    this.processCurseforgeJob(job, { projectId, fileId }).catch((error) => {
+      console.error('[FileServer] CurseForge install failed:', error);
+      job.status = 'failed';
+      job.error = error instanceof Error ? error.message : String(error);
+      job.progress = { phase: 'failed', note: job.error };
+      job.updatedAt = Date.now();
+    });
+
+    return this.jsonResponse({ id: jobId, status: job.status });
   }
 
   private async handleBackgroundBackupStart(pathname: string, id: string): Promise<Response> {
@@ -643,6 +875,434 @@ class FileServer {
       job.error = `Backup failed: ${error?.message || String(error)}`;
       this.backupJobs.set(id, job);
       console.error(`[FileServer] [${id}] ${job.error}`);
+    }
+  }
+
+  private async processModrinthJob(job: ModpackJob, payload: ModrinthInstallPayload) {
+    const tempDir = `/tmp/modpack-${job.id}`;
+    await ensureDirectory(tempDir);
+
+    try {
+      job.status = 'downloading';
+      job.progress = { phase: 'Resolving Modrinth metadata' };
+      job.updatedAt = Date.now();
+
+      const resolution = await this.resolveModrinthDownload(payload.url, payload.packVersion);
+
+      const archivePath = path.join(tempDir, 'pack.mrpack');
+      job.progress = { phase: 'Downloading pack archive', note: resolution.packName };
+      job.updatedAt = Date.now();
+      const archiveBuffer = await this.downloadFileToPath(resolution.downloadUrl, archivePath, undefined, job, `Pack ${resolution.versionId || ''}`);
+      console.log(`[FileServer] Downloaded Modrinth archive (${archiveBuffer.byteLength} bytes)`);
+
+      job.progress = { phase: 'Extracting pack archive' };
+      job.updatedAt = Date.now();
+      await this.extractArchive(archivePath, tempDir);
+
+      const manifestPath = path.join(tempDir, 'modrinth.index.json');
+      const manifest = await this.loadModrinthManifest(manifestPath);
+      job.progress = { phase: 'Preparing filesystem for install' };
+      job.updatedAt = Date.now();
+      await this.resetModsDirectory();
+
+      const overridesDirName = manifest.overrides || 'overrides';
+      const overridesPath = path.join(tempDir, overridesDirName);
+      const overridesApplied = await this.applyOverrides(overridesPath);
+
+      job.status = 'installing';
+      job.updatedAt = Date.now();
+      const installInfo = await this.installModrinthFiles(manifest, job);
+
+      job.status = 'completed';
+      job.progress = { phase: 'completed', note: 'Modpack installation finished' };
+      job.result = {
+        loader: installInfo.loader,
+        minecraftVersion: installInfo.minecraftVersion,
+        profileSuggestion: this.recommendProfile(installInfo.loader, installInfo.minecraftVersion),
+        packName: manifest.name || resolution.packName,
+        filesInstalled: installInfo.installedCount,
+        overridesApplied,
+        metadata: {
+          modrinthProjectId: resolution.projectId,
+          modrinthVersionId: resolution.versionId,
+        },
+      };
+      job.updatedAt = Date.now();
+    } finally {
+      await removePath(tempDir);
+    }
+  }
+
+  private async processCurseforgeJob(job: ModpackJob, payload: CurseforgeInstallPayload) {
+    const tempDir = `/tmp/curseforge-${job.id}`;
+    await ensureDirectory(tempDir);
+
+    try {
+      job.status = 'downloading';
+      job.progress = { phase: 'Resolving CurseForge metadata' };
+      job.updatedAt = Date.now();
+
+      const packInfo = await this.fetchCurseforgePack(payload.projectId, payload.fileId);
+
+      const archivePath = path.join(tempDir, packInfo.fileName);
+      job.progress = { phase: 'Downloading pack archive', note: packInfo.name };
+      job.updatedAt = Date.now();
+      await this.downloadFileToPath(packInfo.downloadUrl, archivePath, undefined, job, `Pack ${packInfo.fileId}`);
+
+      job.progress = { phase: 'Extracting pack archive' };
+      job.updatedAt = Date.now();
+      await this.extractArchive(archivePath, tempDir);
+
+      const manifestPath = path.join(tempDir, 'manifest.json');
+      const manifest = await this.loadCurseforgeManifest(manifestPath);
+
+      job.progress = { phase: 'Preparing filesystem for install' };
+      job.updatedAt = Date.now();
+      await this.resetModsDirectory();
+
+      const overridesDir = manifest.overrides ? path.join(tempDir, manifest.overrides) : path.join(tempDir, 'overrides');
+      const overridesApplied = await this.applyOverrides(overridesDir);
+
+      job.status = 'installing';
+      job.updatedAt = Date.now();
+      const installInfo = await this.installCurseforgeFiles(manifest, job);
+
+      job.status = 'completed';
+      job.progress = { phase: 'completed', note: 'Modpack installation finished' };
+      job.result = {
+        loader: installInfo.loader,
+        minecraftVersion: installInfo.minecraftVersion,
+        profileSuggestion: this.recommendProfile(installInfo.loader, installInfo.minecraftVersion),
+        packName: packInfo.name,
+        filesInstalled: installInfo.installedCount,
+        overridesApplied,
+        metadata: {
+          curseforgeProjectId: payload.projectId,
+          curseforgeFileId: payload.fileId,
+        },
+      };
+      job.updatedAt = Date.now();
+    } finally {
+      await removePath(tempDir);
+    }
+  }
+
+  private async resolveModrinthDownload(url: string, versionHint?: string): Promise<{ downloadUrl: string; packName: string; projectId?: string; versionId?: string }> {
+    let downloadUrl = url;
+    let packName = 'Modrinth Pack';
+    let projectId: string | undefined;
+    let versionId = versionHint;
+
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith('.mrpack')) {
+      const parts = parsed.pathname.split('/');
+      packName = parts.pop() || packName;
+      return { downloadUrl: url, packName, projectId: parsed.searchParams.get('projectId') || undefined, versionId: parsed.searchParams.get('versionId') || versionId };
+    }
+    const slug = this.extractModrinthSlug(parsed);
+    if (!versionHint && parsed.pathname.includes('/version/')) {
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      versionId = segments[segments.indexOf('version') + 1];
+    }
+
+    const project = await this.modrinthRequest<any>(`/project/${slug}`);
+    projectId = project?.project_id || project?.id || slug;
+    packName = project?.title || packName;
+
+    let versionData: any;
+    if (versionId) {
+      versionData = await this.modrinthRequest<any>(`/project/${slug}/version/${versionId}`);
+    } else {
+      const versions = await this.modrinthRequest<any[]>(`/project/${slug}/version`);
+      versionData = this.pickPreferredModrinthVersion(versions);
+    }
+
+    if (!versionData) {
+      throw new Error('Unable to locate Modrinth version');
+    }
+
+    versionId = versionData.id;
+    const fileEntry = Array.isArray(versionData.files) && versionData.files.length > 0
+      ? (versionData.files.find((f: any) => f.primary) || versionData.files[0])
+      : null;
+    if (!fileEntry?.url) {
+      throw new Error('Modrinth version is missing downloadable files');
+    }
+
+    downloadUrl = fileEntry.url;
+    packName = versionData.name || packName;
+
+    return { downloadUrl, packName, projectId, versionId };
+  }
+
+  private extractModrinthSlug(parsed: URL): string {
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const modpackIdx = segments.findIndex((segment) => segment === 'modpack');
+    if (modpackIdx >= 0 && segments[modpackIdx + 1]) {
+      return segments[modpackIdx + 1];
+    }
+    return segments[segments.length - 1] || parsed.hostname;
+  }
+
+  private async modrinthRequest<T>(pathname: string): Promise<T> {
+    const response = await fetch(`https://api.modrinth.com/v2${pathname}`);
+    if (!response.ok) {
+      throw new Error(`Modrinth API request failed (${response.status})`);
+    }
+    return await response.json() as T;
+  }
+
+  private pickPreferredModrinthVersion(versions: any[]): any {
+    if (!Array.isArray(versions) || versions.length === 0) {
+      return null;
+    }
+    const release = versions.find((version) => version.version_type === 'release');
+    return release || versions[0];
+  }
+
+  private async downloadFileToPath(
+    url: string,
+    destination: string,
+    headers?: Record<string, string>,
+    job?: ModpackJob,
+    description?: string
+  ): Promise<ArrayBuffer> {
+    console.log(`[FileServer] Downloading ${description || url} -> ${destination}`);
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      throw new Error(`Failed to download ${url} (${response.status} ${response.statusText})`);
+    }
+    const buffer = await response.arrayBuffer();
+    await ensureDirectory(path.posix.dirname(destination));
+    await Bun.write(destination, buffer);
+    if (job) {
+      job.updatedAt = Date.now();
+    }
+    return buffer;
+  }
+
+  private async extractArchive(archivePath: string, destination: string) {
+    const proc = spawn(['unzip', '-o', archivePath, '-d', destination]);
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) {
+      const stderr = await new Response(proc.stderr).text();
+      throw new Error(`Failed to extract archive: ${stderr}`);
+    }
+  }
+
+  private async loadModrinthManifest(manifestPath: string): Promise<ModrinthManifest> {
+    const file = Bun.file(manifestPath);
+    if (!(await file.exists())) {
+      throw new Error('modrinth.index.json not found in archive');
+    }
+    const contents = await file.text();
+    return JSON.parse(contents) as ModrinthManifest;
+  }
+
+  private async resetModsDirectory() {
+    const modsDir = '/data/mods';
+    await ensureDirectory(modsDir);
+    const proc = spawn(['sh', '-c', `rm -rf ${modsDir}/*`]);
+    await proc.exited;
+    await ensureDirectory(modsDir);
+  }
+
+  private async applyOverrides(overridesPath: string): Promise<boolean> {
+    if (!(await pathExists(overridesPath))) {
+      return false;
+    }
+    console.log(`[FileServer] Applying overrides from ${overridesPath}`);
+    const proc = spawn(['cp', '-a', `${overridesPath}/.`, '/data/']);
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) {
+      const stderr = await new Response(proc.stderr).text();
+      throw new Error(`Failed to copy overrides: ${stderr}`);
+    }
+    return true;
+  }
+
+  private sanitizeRelativePath(relPath: string): string {
+    const normalized = path.posix.normalize(relPath).replace(/^\/+/g, '');
+    if (!normalized || normalized.startsWith('..')) {
+      throw new Error(`Unsafe path in manifest: ${relPath}`);
+    }
+    return normalized;
+  }
+
+  private async installModrinthFiles(manifest: ModrinthManifest, job: ModpackJob): Promise<{ installedCount: number; loader?: 'PAPER' | 'FORGE' | 'FABRIC' | 'NEOFORGE'; minecraftVersion?: string }> {
+    const files = Array.isArray(manifest.files) ? manifest.files : [];
+    const total = files.length;
+    let installed = 0;
+    const loaderInfo = this.extractLoaderInfo(manifest.dependencies);
+
+    for (let index = 0; index < files.length; index++) {
+      const fileEntry = files[index];
+      if (fileEntry.env?.server === 'unsupported') {
+        continue;
+      }
+      const normalizedInput = (fileEntry.path || `mods/file-${index}.jar`).replace(/\\/g, '/');
+      const relPath = this.sanitizeRelativePath(normalizedInput);
+      const destination = path.posix.join('/data', relPath);
+      const url = fileEntry.downloads?.[0];
+      if (!url) {
+        throw new Error(`Missing download URL for ${relPath}`);
+      }
+      job.progress = {
+        phase: 'Installing mods',
+        currentFile: relPath,
+        currentIndex: index + 1,
+        totalFiles: total,
+      };
+      job.updatedAt = Date.now();
+      const buffer = await this.downloadFileToPath(url, destination, undefined, job, relPath);
+      await this.verifyHash(buffer, fileEntry.hashes, relPath);
+      installed++;
+    }
+
+    return {
+      installedCount: installed,
+      loader: loaderInfo.loader,
+      minecraftVersion: loaderInfo.minecraftVersion,
+    };
+  }
+
+  private extractLoaderInfo(dependencies?: Record<string, string>): { loader?: 'PAPER' | 'FORGE' | 'FABRIC' | 'NEOFORGE'; minecraftVersion?: string } {
+    if (!dependencies) {
+      return {};
+    }
+    if (dependencies['neoforge']) {
+      return { loader: 'NEOFORGE', minecraftVersion: dependencies['minecraft'] };
+    }
+    if (dependencies['forge']) {
+      return { loader: 'FORGE', minecraftVersion: dependencies['minecraft'] };
+    }
+    if (dependencies['fabric-loader'] || dependencies['quilt-loader']) {
+      return { loader: 'FABRIC', minecraftVersion: dependencies['minecraft'] };
+    }
+    return { minecraftVersion: dependencies['minecraft'] };
+  }
+
+  private recommendProfile(loader?: 'PAPER' | 'FORGE' | 'FABRIC' | 'NEOFORGE', minecraftVersion?: string): string | undefined {
+    if (!loader || !minecraftVersion) {
+      return undefined;
+    }
+    return PROFILE_HINTS.find((profile) => profile.loader === loader && profile.minecraftVersion === minecraftVersion)?.profileId;
+  }
+
+  private async fetchCurseforgePack(projectId: number, fileId: number): Promise<CurseforgePackInfo> {
+    const response = await this.curseforgeRequest<any>(`/mods/${projectId}/files/${fileId}`);
+    const fileData = response?.data;
+    if (!fileData?.downloadUrl) {
+      throw new Error('CurseForge file metadata is missing a download URL');
+    }
+    return {
+      name: fileData.displayName || fileData.fileName,
+      fileName: fileData.fileName,
+      fileId,
+      downloadUrl: fileData.downloadUrl,
+    };
+  }
+
+  private async fetchCurseforgeFile(projectId: number, fileId: number): Promise<any> {
+    const response = await this.curseforgeRequest<any>(`/mods/${projectId}/files/${fileId}`);
+    return response?.data;
+  }
+
+  private async curseforgeRequest<T>(pathname: string): Promise<T> {
+    const apiKey = process.env.CURSEFORGE_API_KEY;
+    if (!apiKey) {
+      throw new Error('CURSEFORGE_API_KEY is not configured');
+    }
+    const response = await fetch(`https://api.curseforge.com/v1${pathname}`, {
+      headers: {
+        'x-api-key': apiKey,
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`CurseForge API request failed (${response.status})`);
+    }
+    return await response.json() as T;
+  }
+
+  private async loadCurseforgeManifest(filePath: string): Promise<CurseforgeManifest> {
+    const manifestFile = Bun.file(filePath);
+    if (!(await manifestFile.exists())) {
+      throw new Error('manifest.json not found in CurseForge archive');
+    }
+    return JSON.parse(await manifestFile.text()) as CurseforgeManifest;
+  }
+
+  private determineLoaderFromModLoaders(modLoaders: Array<{ id: string; primary?: boolean }>): { loader?: 'PAPER' | 'FORGE' | 'FABRIC' | 'NEOFORGE' } {
+    if (!Array.isArray(modLoaders) || modLoaders.length === 0) {
+      return {};
+    }
+    const loaderEntry = modLoaders.find((loader) => loader.primary) || modLoaders[0];
+    const id = loaderEntry.id.toLowerCase();
+    if (id.includes('neoforge')) {
+      return { loader: 'NEOFORGE' };
+    }
+    if (id.includes('forge')) {
+      return { loader: 'FORGE' };
+    }
+    if (id.includes('fabric')) {
+      return { loader: 'FABRIC' };
+    }
+    return {};
+  }
+
+  private async installCurseforgeFiles(manifest: CurseforgeManifest, job: ModpackJob): Promise<{ installedCount: number; loader?: 'PAPER' | 'FORGE' | 'FABRIC' | 'NEOFORGE'; minecraftVersion?: string }> {
+    const files = Array.isArray(manifest.files) ? manifest.files : [];
+    const total = files.length;
+    const loaderInfo = this.determineLoaderFromModLoaders(manifest.minecraft?.modLoaders || []);
+    const minecraftVersion = manifest.minecraft?.version;
+    let installed = 0;
+
+    for (let index = 0; index < files.length; index++) {
+      const entry = files[index];
+      if (entry.required === false) {
+        continue;
+      }
+      job.progress = {
+        phase: 'Installing mods',
+        currentFile: `Project ${entry.projectID}`,
+        currentIndex: index + 1,
+        totalFiles: total,
+      };
+      job.updatedAt = Date.now();
+      const fileData = await this.fetchCurseforgeFile(entry.projectID, entry.fileID);
+      if (!fileData?.downloadUrl) {
+        throw new Error(`CurseForge file ${entry.projectID}/${entry.fileID} is missing a download URL`);
+      }
+      const targetName = fileData.fileName || `${entry.projectID}-${entry.fileID}.jar`;
+      const destination = path.posix.join('/data/mods', targetName);
+      await this.downloadFileToPath(fileData.downloadUrl, destination, undefined, job, targetName);
+      installed++;
+    }
+
+    return {
+      installedCount: installed,
+      loader: loaderInfo.loader,
+      minecraftVersion,
+    };
+  }
+
+  private async verifyHash(buffer: ArrayBuffer, hashes: Record<string, string> | undefined, label: string) {
+    if (!hashes) {
+      return;
+    }
+    if (hashes.sha1) {
+      const digest = await crypto.subtle.digest('SHA-1', buffer);
+      const hex = bufferToHex(digest);
+      if (hex !== hashes.sha1.toLowerCase()) {
+        throw new Error(`SHA-1 mismatch for ${label}`);
+      }
+    }
+    if (hashes.sha512) {
+      const digest = await crypto.subtle.digest('SHA-512', buffer);
+      const hex = bufferToHex(digest);
+      if (hex !== hashes.sha512.toLowerCase()) {
+        throw new Error(`SHA-512 mismatch for ${label}`);
+      }
     }
   }
   private async handleFileServe(pathname: string): Promise<Response> {
@@ -1179,13 +1839,42 @@ class FileServer {
 // Helper to delete file (Bun doesn't have unlink in standard API)
 async function unlink(path: string): Promise<void> {
   const proc = spawn(["rm", "-f", path]);
-  await proc.exited;
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`Failed to remove ${path}: ${stderr}`);
+  }
 }
 
 // Helper to ensure directory exists
 async function ensureDirectory(path: string): Promise<void> {
   const proc = spawn(["mkdir", "-p", path]);
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`Failed to create directory ${path}: ${stderr}`);
+  }
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  const proc = spawn(['sh', '-c', `[ -e "${targetPath}" ]`]);
+  const exitCode = await proc.exited;
+  return exitCode === 0;
+}
+
+async function removePath(targetPath: string): Promise<void> {
+  if (!targetPath || targetPath === '/' || targetPath === '/data') {
+    return;
+  }
+  const proc = spawn(['rm', '-rf', targetPath]);
   await proc.exited;
+}
+
+function bufferToHex(buffer: ArrayBuffer): string {
+  const byteArray = new Uint8Array(buffer);
+  return Array.from(byteArray)
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 // Start the server
@@ -1194,4 +1883,3 @@ server.start().catch((error) => {
   console.error("[FileServer] Failed to start:", error);
   process.exit(1);
 });
-

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import { fetchApi } from '../utils/api';
+import type { ServerState } from '../types/api';
 
 interface MinimapProps {
-  serverState: 'stopped' | 'starting' | 'running' | 'stopping';
+  serverState: ServerState;
 }
 
 export function Minimap({ serverState }: MinimapProps) {
@@ -420,4 +421,3 @@ export function Minimap({ serverState }: MinimapProps) {
     </>
   );
 }
-

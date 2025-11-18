@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef } from 'preact/hooks';
 import { fetchApi } from '../utils/api';
+import type { ServerState } from '../types/api';
 
 interface Props {
-  serverState?: 'stopped' | 'starting' | 'running' | 'stopping';
+  serverState?: ServerState;
 }
 
 interface SessionData {

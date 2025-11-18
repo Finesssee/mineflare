@@ -6,6 +6,7 @@ import { treaty } from "@elysiajs/eden";
 import { useEffect, useMemo, useState, useRef, useCallback } from 'preact/hooks';
 import { useSignal } from "@preact/signals";
 import { apiHost, fetchApi } from "../utils/api";
+import type { ServerState } from '../types/api';
 
 // This exists for the sake of getting the type of the app
 const fakeApp = () => new Elysia()
@@ -27,8 +28,6 @@ function useApp() {
 }
 
 const history = signal([] as Array<string>);
-
-type ServerState = 'stopped' | 'starting' | 'running' | 'stopping';
 
 interface TerminalProps {
     serverState: ServerState;

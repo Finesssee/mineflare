@@ -1,6 +1,7 @@
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { useToolOutput, useTheme } from '../shared/useOpenAiGlobal';
+import type { ServerState } from '../../client/types/api';
 
 interface SessionData {
   startTime?: number;
@@ -10,7 +11,7 @@ interface SessionData {
 
 interface ServerActionData {
   success: boolean;
-  serverState?: 'stopped' | 'starting' | 'running' | 'stopping';
+  serverState?: ServerState;
   message?: string;
   lastSession?: SessionData;
   action?: 'start' | 'stop';
@@ -286,7 +287,6 @@ export function ServerAction() {
     </div>
   );
 }
-
 
 
 

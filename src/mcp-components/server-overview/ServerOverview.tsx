@@ -1,5 +1,6 @@
 import { h } from 'preact';
 import { useToolOutput, useTheme } from '../shared/useOpenAiGlobal';
+import type { ServerState } from '../../client/types/api';
 
 interface ServerStatus {
   online: boolean;
@@ -21,7 +22,7 @@ interface SessionInfo {
 interface ServerOverviewData {
   status: ServerStatus;
   players: Player[];
-  serverState: 'stopped' | 'starting' | 'running' | 'stopping';
+  serverState: ServerState;
   startupStep?: string;
   sessionInfo?: SessionInfo;
 }
@@ -278,7 +279,6 @@ export function ServerOverview() {
     </div>
   );
 }
-
 
 
 

@@ -1,10 +1,10 @@
 import { useState } from 'preact/hooks';
-import type { SupportedVersion } from '../types/api';
+import type { SupportedVersion, ServerState } from '../types/api';
 
 interface Props {
   currentVersion: string;
   supportedVersions: SupportedVersion[];
-  serverState: 'stopped' | 'starting' | 'running' | 'stopping';
+  serverState: ServerState;
   onVersionChange: (version: string) => Promise<void>;
 }
 

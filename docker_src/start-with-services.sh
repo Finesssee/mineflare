@@ -909,6 +909,11 @@ write_status "Initializing services"
 
 echo "Starting services..."
 
+MAINTENANCE_MODE_FLAG="${MAINTENANCE_MODE:-false}"
+if [ "${MAINTENANCE_MODE_FLAG}" = "true" ]; then
+  echo "Maintenance mode enabled — Minecraft server will remain offline"
+fi
+
 
 # Start VNC services for embedded browser
 write_status "Starting virtual display (Xvfb)" 
@@ -984,26 +989,39 @@ configure_dynmap
 echo "Services started, launching main application..."
 echo "Command: $@"
 
-write_status "Starting Minecraft server"
+if [ "${MAINTENANCE_MODE_FLAG}" = "true" ]; then
+  write_status "Maintenance mode active"
+else
+  write_status "Starting Minecraft server"
+fi
 
 # Set up SIGTERM trap
 trap handle_shutdown SIGTERM
 
-# Execute Minecraft in restart loop (background)
-(
+if [ "${MAINTENANCE_MODE_FLAG}" = "true" ]; then
+  echo "Maintenance mode active: keeping background services online without Minecraft"
+  echo "Waiting for shutdown signal..."
   while true; do
-    echo "Starting Minecraft server (attempt at $(date))"
-    write_status "Minecraft server running"
-    "$@" | hteetp --host 0.0.0.0 --port 8082 --size 1M --text
-    EXIT_CODE=$?
-    echo "Minecraft server exited (code: $EXIT_CODE), restarting in 2 seconds..."
-    write_status "Minecraft server restarting"
-    sleep 2
+    sleep 3600 &
+    wait $!
   done
-) &
-MINECRAFT_PID=$!
+else
+  # Execute Minecraft in restart loop (background)
+  (
+    while true; do
+      echo "Starting Minecraft server (attempt at $(date))"
+      write_status "Minecraft server running"
+      "$@" | hteetp --host 0.0.0.0 --port 8082 --size 1M --text
+      EXIT_CODE=$?
+      echo "Minecraft server exited (code: $EXIT_CODE), restarting in 2 seconds..."
+      write_status "Minecraft server restarting"
+      sleep 2
+    done
+  ) &
+  MINECRAFT_PID=$!
 
-echo "Minecraft server started in restart loop (PID: $MINECRAFT_PID)"
+  echo "Minecraft server started in restart loop (PID: $MINECRAFT_PID)"
 
-# Wait indefinitely for container shutdown signal
-wait
+  # Wait indefinitely for container shutdown signal
+  wait
+fi

@@ -43,6 +43,8 @@ export type PluginStatus =
   | { type: "warning"; message: string }
   | { type: "alert"; message: string };
 
+export type ServerState = 'stopped' | 'starting' | 'running' | 'stopping' | 'maintenance';
+
 export interface Plugin {
   filename: string;
   displayName: string;

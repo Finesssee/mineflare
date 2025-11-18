@@ -28,6 +28,40 @@ type PluginStatus =
   | { type: "warning"; message: string }
   | { type: "alert"; message: string };
 
+type ContainerStatus = 'running' | 'stopping' | 'stopped' | 'starting' | 'maintenance';
+
+type ModpackInstallSource = 'modrinth' | 'curseforge';
+type ModpackJobStatus = 'pending' | 'downloading' | 'installing' | 'completed' | 'failed';
+
+interface ModpackJobProgress {
+  phase: string;
+  currentFile?: string;
+  currentIndex?: number;
+  totalFiles?: number;
+  note?: string;
+}
+
+interface ModpackJobResult {
+  loader?: 'PAPER' | 'FORGE' | 'FABRIC' | 'NEOFORGE';
+  minecraftVersion?: string;
+  profileSuggestion?: string;
+  packName?: string;
+  filesInstalled?: number;
+  overridesApplied?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+interface ContainerModpackJob {
+  id: string;
+  source: ModpackInstallSource;
+  status: ModpackJobStatus;
+  startedAt?: number;
+  updatedAt?: number;
+  progress?: ModpackJobProgress;
+  result?: ModpackJobResult;
+  error?: string;
+}
+
 // Plugin specifications with required environment variables
 const PLUGIN_SPECS = [
   {
@@ -56,6 +90,9 @@ export class MinecraftContainer extends Container {
 
     private lastRconSuccess: Date | null = null;
     private _isPasswordSet: boolean = false;
+    private maintenanceModeEnabled = false;
+    private modpackJobs: Map<string, ContainerModpackJob> = new Map();
+    private activeModpackJob: ContainerModpackJob | null = null;
     // Port the container listens on (default: 8083 - file server)
     defaultPort = 8083;
     // Time before container sleeps due to inactivity (default: 30s)
@@ -99,6 +136,7 @@ export class MinecraftContainer extends Container {
         OPTIONAL_PLUGINS: this.pluginFilenamesToEnable.join(" "), // space separated for consumption by bash script start-with-services.sh
         CLOUDFLARE_TUNNEL_TOKEN: "null",
         CLOUDFLARE_TUNNEL_HOSTNAME: (this.env as Env).CLOUDFLARE_TUNNEL_HOSTNAME || "",
+        MAINTENANCE_MODE: "false",
     };
     
   
@@ -113,7 +151,7 @@ export class MinecraftContainer extends Container {
             id    INTEGER PRIMARY KEY,
             json_data BLOB
           );
-          INSERT OR IGNORE INTO state (id, json_data) VALUES (1, jsonb('{"optionalPlugins": [], "serverProfileId": "paper-1-21-8", "serverVersion": "1.21.8"}'));
+          INSERT OR IGNORE INTO state (id, json_data) VALUES (1, jsonb('{"optionalPlugins": [], "serverProfileId": "paper-1-21-8", "serverVersion": "1.21.8", "maintenanceMode": false}'));
           CREATE TABLE IF NOT EXISTS auth (
             id INTEGER PRIMARY KEY,
             salt TEXT,
@@ -135,6 +173,37 @@ export class MinecraftContainer extends Container {
       return this._initializeSql();
     }
 
+    private loadMaintenanceModeFromState(): boolean {
+      try {
+        const result = this._sql.exec(`
+          SELECT json_data->>'$.maintenanceMode' AS maintenanceMode
+          FROM state
+          WHERE id = 1
+        `).one();
+        if (!result || result.maintenanceMode === null || result.maintenanceMode === undefined) {
+          return false;
+        }
+        const value = String(result.maintenanceMode);
+        return value === 'true' || value === '1';
+      } catch (error) {
+        console.error('Failed to read maintenance mode from state:', error);
+        return false;
+      }
+    }
+
+    private persistMaintenanceMode(enabled: boolean) {
+      this._sql.exec(
+        `UPDATE state SET json_data = jsonb_patch(json_data, jsonb(?)) WHERE id = 1`,
+        JSON.stringify({ maintenanceMode: enabled })
+      );
+    }
+
+    private setMaintenanceModeFlag(enabled: boolean) {
+      this.maintenanceModeEnabled = enabled;
+      this.envVars.MAINTENANCE_MODE = enabled ? "true" : "false";
+      this.persistMaintenanceMode(enabled);
+    }
+
     constructor(ctx: DurableObject['ctx'], env: Env, options?: ContainerOptions) {
         super(ctx, env);
         if (ctx.container === undefined) {
@@ -145,6 +214,8 @@ export class MinecraftContainer extends Container {
         this._container = ctx.container;
         // Initialize SQL immediately so we can synchronously determine password status
         this._initializeSql();
+        this.maintenanceModeEnabled = this.loadMaintenanceModeFromState();
+        this.envVars.MAINTENANCE_MODE = this.maintenanceModeEnabled ? "true" : "false";
         this.applyServerProfileEnv(this.getSelectedServerProfile());
         try {
           const result = this._sql.exec("SELECT 1 as ok FROM auth LIMIT 1;").one();
@@ -380,6 +451,17 @@ export class MinecraftContainer extends Container {
       const currentStatus = await this.getStatus();
       console.error("Container status before stop:", currentStatus);
       
+      if (currentStatus === 'maintenance') {
+        console.error("Stopping maintenance mode services without triggering world backup");
+        this.stopping = true;
+        try {
+          await super.stop("SIGTERM");
+        } finally {
+          this.stopping = false;
+        }
+        return;
+      }
+
       // Only attempt backup if container is running
       let backupSuccess = false;
       if (currentStatus === 'running') {
@@ -467,17 +549,18 @@ export class MinecraftContainer extends Container {
       // The itzg image uses VERSION env var
 
       console.error("Getting status");
-      if(await this.getStatus() !== 'stopped') {
+      const initialStatus = await this.getStatus();
+      if(initialStatus !== 'stopped') {
         // wait up to 3 mins for the server to start
         console.error("Waiting for server to start");
         const deadline = Date.now() + 3 * 60 * 1000;
-        while(await this.getStatus() !== 'running') {
+        while(!this.isContainerOperational(await this.getStatus())) {
           await new Promise(resolve => setTimeout(resolve, 250));
           if(Date.now() > deadline) {
             throw new Error("Server did not start in time");
           }
         }
-        if(await this.getStatus() !== 'running') {
+        if(!this.isContainerOperational(await this.getStatus())) {
           throw new Error("Server did not start in time");
         }
       }
@@ -493,13 +576,13 @@ export class MinecraftContainer extends Container {
       } catch (error) {
         console.error("Error while starting ports but it's probably OK", error);
         const deadline = Date.now() + 5000;
-        while(await this.getStatus() !== 'running') {
+        while(!this.isContainerOperational(await this.getStatus())) {
           await new Promise(resolve => setTimeout(resolve, 250));
           if(Date.now() > deadline) {
             throw new Error("Server did not start in time");
           }
         }
-        if(await this.getStatus() !== 'running') {
+        if(!this.isContainerOperational(await this.getStatus())) {
           throw error;
         }
       }
@@ -509,6 +592,10 @@ export class MinecraftContainer extends Container {
 
     override onStart() {
       console.error("Container successfully started");
+      if (this.maintenanceModeEnabled) {
+        console.error("Maintenance mode active, skipping gameplay session start");
+        return;
+      }
       this.recordSessionStart();
       this.ctx.waitUntil(this.initRcon().then(rcon => rcon?.send("dynmap fullrender world")));
     }
@@ -684,32 +771,249 @@ export class MinecraftContainer extends Container {
     }
   }
 
-  public async getStatus(): Promise<'running' | 'stopping' | 'stopped' | 'starting'> {
+  public isInMaintenanceMode(): boolean {
+    return this.maintenanceModeEnabled;
+  }
+
+  public async enterMaintenanceMode(): Promise<{ success: boolean; message?: string }> {
+    let status = await this.getStatus();
+    if (status === 'running' || status === 'starting') {
+      throw new Error('Stop the server before entering maintenance mode');
+    }
+
+    if (status === 'stopping') {
+      const deadline = Date.now() + 60_000;
+      while (await this.getStatus() === 'stopping') {
+        if (Date.now() > deadline) {
+          throw new Error('Server shutdown timed out before maintenance mode could start');
+        }
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      status = await this.getStatus();
+    }
+
+    if (this.maintenanceModeEnabled && status === 'maintenance') {
+      return { success: true };
+    }
+
+    this.setMaintenanceModeFlag(true);
+
+    if (status === 'stopped') {
+      await this.start();
+    }
+
+    return { success: true };
+  }
+
+  public async exitMaintenanceMode(): Promise<{ success: boolean; message?: string }> {
+    if (!this.maintenanceModeEnabled) {
+      return { success: true };
+    }
+
+    const status = await this.getStatus();
+    if (status === 'maintenance') {
+      await this.stop();
+    }
+
+    this.setMaintenanceModeFlag(false);
+    return { success: true };
+  }
+
+  public async installModpack(params: { source: ModpackInstallSource; url?: string; packVersion?: string; projectId?: number; fileId?: number }): Promise<{ jobId: string }> {
+    if (this.activeModpackJob && this.activeModpackJob.status !== 'completed' && this.activeModpackJob.status !== 'failed') {
+      throw new Error('Another modpack installation is already running');
+    }
+
+    if (params.source === 'modrinth') {
+      if (!params.url || !params.url.trim()) {
+        throw new Error('A Modrinth URL is required');
+      }
+    } else if (params.source === 'curseforge') {
+      if (typeof params.projectId !== 'number' || typeof params.fileId !== 'number') {
+        throw new Error('CurseForge projectId and fileId are required');
+      }
+    } else {
+      throw new Error('Unsupported modpack source');
+    }
+
+    await this.enterMaintenanceMode();
+    let trackingScheduled = false;
+    try {
+      const endpoint = params.source === 'modrinth' ? '/modpack/install/modrinth' : '/modpack/install/curseforge';
+      const payload = params.source === 'modrinth'
+        ? { url: params.url?.trim(), packVersion: params.packVersion?.trim() || undefined }
+        : { projectId: params.projectId, fileId: params.fileId };
+
+      const response = await this.containerFetch(new Request(`http://localhost:8083${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }), 8083);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'File server rejected the modpack install request');
+      }
+
+      const result = await response.json() as { id?: string };
+      if (!result?.id) {
+        throw new Error('File server did not return a job id');
+      }
+
+      const job: ContainerModpackJob = {
+        id: result.id,
+        source: params.source,
+        status: 'pending',
+        startedAt: Date.now(),
+        updatedAt: Date.now(),
+        progress: { phase: 'queued' },
+      };
+      this.modpackJobs.set(job.id, job);
+      this.activeModpackJob = job;
+      trackingScheduled = true;
+      this.ctx.waitUntil(this.trackModpackJob(job.id, params.source));
+      return { jobId: job.id };
+    } catch (error) {
+      if (!trackingScheduled) {
+        await this.exitMaintenanceMode().catch((exitError) => console.error('Failed to exit maintenance mode after install error:', exitError));
+      }
+      throw error;
+    }
+  }
+
+  public async getModpackJob(jobId: string): Promise<ContainerModpackJob | null> {
+    const cached = this.modpackJobs.get(jobId);
+    if (cached && (cached.status === 'completed' || cached.status === 'failed')) {
+      return cached;
+    }
+    try {
+      const remote = await this.fetchModpackJobFromFileServer(jobId);
+      if (remote) {
+        this.modpackJobs.set(jobId, remote);
+        return remote;
+      }
+    } catch (error) {
+      console.error('Failed to load modpack job from file server:', error);
+    }
+    return cached ?? null;
+  }
+
+  private async trackModpackJob(jobId: string, source: ModpackInstallSource) {
+    try {
+      while (true) {
+        const job = await this.fetchModpackJobFromFileServer(jobId);
+        if (!job) {
+          throw new Error(`Modpack job ${jobId} not found`);
+        }
+        job.source = source;
+        job.updatedAt = Date.now();
+        this.modpackJobs.set(jobId, job);
+        this.activeModpackJob = job;
+        try {
+          await this.broadcast(JSON.stringify({ type: 'modpack-progress', job }));
+        } catch (broadcastError) {
+          console.error('Failed to broadcast modpack progress:', broadcastError);
+        }
+        if (job.status === 'completed') {
+          await this.handleSuccessfulModpack(job);
+          break;
+        }
+        if (job.status === 'failed') {
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+    } catch (error) {
+      console.error('Modpack tracking failed:', error);
+      const failedJob: ContainerModpackJob = {
+        id: jobId,
+        source,
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+        updatedAt: Date.now(),
+      };
+      this.modpackJobs.set(jobId, failedJob);
+      try {
+        await this.broadcast(JSON.stringify({ type: 'modpack-progress', job: failedJob }));
+      } catch (broadcastError) {
+        console.error('Failed to broadcast modpack failure:', broadcastError);
+      }
+    } finally {
+      this.activeModpackJob = null;
+      await this.exitMaintenanceMode().catch((exitError) => console.error('Failed to exit maintenance mode after modpack install:', exitError));
+    }
+  }
+
+  private async fetchModpackJobFromFileServer(jobId: string): Promise<ContainerModpackJob | null> {
+    const response = await this.containerFetch(new Request(`http://localhost:8083/modpack/status/${jobId}`), 8083);
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to read modpack job status');
+    }
+    return await response.json() as ContainerModpackJob;
+  }
+
+  private async handleSuccessfulModpack(job: ContainerModpackJob) {
+    try {
+      const profileId = job.result?.profileSuggestion;
+      if (profileId) {
+        const profile = SERVER_PROFILE_MAP.get(profileId);
+        if (profile) {
+          this.saveServerProfile(profile);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to apply profile after modpack install:', error);
+    }
+
+    try {
+      await this.performBackup();
+    } catch (error) {
+      console.error('Post-install backup failed:', error);
+    }
+  }
+
+  public async getStatus(): Promise<ContainerStatus> {
     const running = this._container?.running;
 
     const state = await this.getState();
-    const status = state.status;
-    if(status === 'stopped_with_code') {
-      this.stopping = false;
-      return 'stopped';
-    } else if ( status === 'healthy') {
-      if(running) {
-        if(this.stopping) {
-          return 'stopping';
-        }
-        return 'running';
-      }
+    const status = state.status as ContainerStatus | 'healthy' | 'stopped_with_code';
+    let resolved: ContainerStatus;
 
-      return 'stopped';
+    if (status === 'stopped_with_code') {
+      this.stopping = false;
+      resolved = 'stopped';
+    } else if (status === 'healthy') {
+      if (running) {
+        resolved = this.stopping ? 'stopping' : 'running';
+      } else {
+        resolved = 'stopped';
+      }
     } else if (status === 'stopped') {
       this.stopping = false;
-      return status;
+      resolved = 'stopped';
     } else if (status === 'running') {
-      if(this.stopping) {
-        return 'stopping';
-      }
+      resolved = this.stopping ? 'stopping' : 'running';
+    } else if (status === 'starting') {
+      resolved = 'starting';
+    } else if (status === 'stopping') {
+      resolved = 'stopping';
+    } else {
+      resolved = 'stopped';
     }
-    return status;
+
+    if (this.maintenanceModeEnabled && resolved === 'running') {
+      return 'maintenance';
+    }
+
+    return resolved;
+  }
+
+  private isContainerOperational(status: ContainerStatus): boolean {
+    return status === 'running' || status === 'maintenance';
   }
 
   public async getStartupStep(): Promise<string | null> {
@@ -717,6 +1021,9 @@ export class MinecraftContainer extends Container {
       const status = await this.getStatus();
       if (status === 'stopped') {
         return null;
+      }
+      if (status === 'maintenance') {
+        return 'maintenance mode active';
       }
       
       const content = await this.getFileContents("/status/step.txt");
@@ -1030,7 +1337,7 @@ export class MinecraftContainer extends Container {
     // Initialize RCON connection
     private async initRcon(maxAttempts = 10): Promise<Rcon | null> {
       const status = await this.getStatus();
-      if(status === 'stopped' || status === 'stopping') {
+      if(status === 'stopped' || status === 'stopping' || status === 'maintenance') {
         return null;
       }
       if(this.rcon) {
@@ -2348,7 +2655,7 @@ export class MinecraftContainer extends Container {
               }
               
               // Only attempt connection if container is running
-              if (status !== 'running') {
+              if (!this.isContainerOperational(status)) {
                 console.error("Container not running yet, waiting before HTTP Proxy connection...");
                 await new Promise(resolve => setTimeout(resolve, 5000));
                 continue;
@@ -2455,7 +2762,7 @@ class HTTPProxyControl {
 
   constructor(
     private ctx: DurableObject['ctx'],
-    private stateProvider: () => Promise<'running' | 'stopping' | 'stopped' | 'starting'>,
+    private stateProvider: () => Promise<ContainerStatus>,
     private fetchImplementation: (request: Request) => Promise<Response>
   ) {}
 
@@ -2480,7 +2787,7 @@ class HTTPProxyControl {
       this.disconnectReject = reject;
     });
     
-    if (state !== 'running') {
+    if (state !== 'running' && state !== 'maintenance') {
       console.error("Container not running, skipping HTTP Proxy connection");
       // Resolve immediately so waitForDisconnect() returns
       if (this.disconnectResolve) {
@@ -3185,7 +3492,7 @@ class HTTPProxyControl {
             return;
           }
           const status = await this.stateProvider();
-          if(status !== 'running') {
+          if(status !== 'running' && status !== 'maintenance') {
             console.error("Container not running, stopping control heartbeat watchdog");
             return;
           }

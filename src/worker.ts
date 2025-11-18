@@ -211,6 +211,46 @@ const elysiaApp = (
     }
   })
 
+  .post("/modpack/install", async ({ body }) => {
+    try {
+      const container = getMinecraftContainer();
+      const payload = body as { source: 'modrinth' | 'curseforge'; url?: string; packVersion?: string; projectId?: number; fileId?: number };
+      const result = await container.installModpack(payload);
+      return { success: true, jobId: result.jobId };
+    } catch (error) {
+      console.error('Failed to start modpack install:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to start modpack installation',
+      };
+    }
+  }, {
+    body: t.Object({
+      source: t.Union([t.Literal('modrinth'), t.Literal('curseforge')]),
+      url: t.Optional(t.String()),
+      packVersion: t.Optional(t.String()),
+      projectId: t.Optional(t.Number()),
+      fileId: t.Optional(t.Number()),
+    }),
+  })
+
+  .get("/modpack/status/:jobId", async ({ params, set }) => {
+    const { jobId } = params as { jobId: string };
+    try {
+      const container = getMinecraftContainer();
+      const job = await container.getModpackJob(jobId);
+      if (!job) {
+        set.status = 404;
+        return { id: jobId, status: 'not_found' };
+      }
+      return job;
+    } catch (error) {
+      console.error('Failed to fetch modpack status:', error);
+      set.status = 500;
+      return { id: jobId, status: 'error', error: error instanceof Error ? error.message : 'Failed to load modpack status' };
+    }
+  })
+
   .get("/connection-info", async () => {
     try {
       const container = getMinecraftContainer();

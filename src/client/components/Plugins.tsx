@@ -1,10 +1,10 @@
 import { useState } from 'preact/hooks';
-import type { Plugin, ConnectionInfo } from '../types/api';
+import type { Plugin, ConnectionInfo, ServerState } from '../types/api';
 import { fetchApi } from '../utils/api';
 
 interface Props {
   plugins: Plugin[];
-  serverState: 'stopped' | 'starting' | 'running' | 'stopping';
+  serverState: ServerState;
   onPluginToggle: (filename: string, enabled: boolean) => Promise<void>;
   connectionInfo?: ConnectionInfo | null;
 }
