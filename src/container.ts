@@ -4,6 +4,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Response as CloudflareResponse } from '@cloudflare/workers-types'
 import { Rcon } from "./lib/rcon";
 import { array, string } from "zod";
+import { DEFAULT_SERVER_PROFILE_ID, SERVER_PROFILES, SERVER_PROFILE_MAP, type ServerProfile } from "./shared/serverProfiles";
 
 type Env = typeof worker.Env;
 interface CloudflareTCPSocket {
@@ -35,71 +36,21 @@ const PLUGIN_SPECS = [
     requiredEnv: [] as Array<{ name: string; description: string }>,
     getStatus: async (container: MinecraftContainer): Promise<PluginStatus> => {
       const status = await container.getStatus();
-      // we can't talk to the container if it's not running
-      if(status !== 'running') {
+      if (status !== 'running') {
         return { type: "no message" };
       }
       return { type: "information", message: "Map rendering is active" };
     },
   },
-  {
-    filename: 'playit-minecraft-plugin',
-    displayName: 'playit.gg',
-    requiredEnv: [] as Array<{ name: string; description: string }>,
-    getStatus: async (container: MinecraftContainer): Promise<PluginStatus> => {
-
-      const status = await container.getStatus();
-      // we can't talk to the container if it's not running
-      if(status !== 'running') {
-        return { type: "no message" };
-      }
-      
-      // need to read in the playit.gg config file
-      let config = null;
-      try{
-        config = await container.getFileContents("/data/plugins/playit-gg/config.yml");
-      } catch (error) {
-        console.log("playit.gg config not found. Usually that means we're just starting up for the first time");
-        return { type: "information", message: "connecting..." };
-      }
-      // find the line starting with agent-secret:
-      const agentSecretLine = config?.split("\n").find(line => line.startsWith("agent-secret:"));
-      // extract the following text and trim the whitespace and any single or double quotes
-      const agentSecret = agentSecretLine?.split("agent-secret:")[1].trim().replace(/['"]/g, '');
-      if(agentSecret) {
-        // now we look for logs with the tunnel url
-        // [13:59:07 INFO]: [gg.playit.minecraft.PlayitKeysSetup] found minecraft java tunnel: internet-mary.gl.joinmc.link
-        // 2025-10-06 15:59:07 [13:59:07 INFO]: [gg.playit.minecraft.PlayitManager] keys and tunnel setup
-        // 2025-10-06 15:59:07 [13:59:07 INFO]: playit.gg: tunnel setup
-        // 2025-10-06 15:59:07 [13:59:07 INFO]: playit.gg: internet-mary.gl.joinmc.link
-        // check for either found minecraft java tunnel: <hostname> or playit.gg: <hostname> - we have to be strict about matching the hostname no spaces and it must fill the line
-        const logs = await container.getLogs();
-        // Match hostnames that contain at least one dot (e.g., "foo.bar")
-        const regex = /found minecraft java tunnel: ([^\s]*\.[^\s]+)$|^playit\.gg: ([^\s]*\.[^\s]+)$/gim;
-        const matches = [...logs.matchAll(regex)];
-        if(matches && matches.length > 0) {
-          const lastMatch = matches[matches.length - 1];
-          const hostname = lastMatch[1] || lastMatch[2];
-          return { type: "information", message: `Use ${hostname} as the server address to connect to your server via playit.gg` };
-        }
-        return { type: "information", message: `playit.gg secret is configured but no tunnel is connected. If playit.gg does not conncet in 5 minutes then check your playit.gg configuration for key starting ${agentSecret.slice(0, 8)}` };
-      }
-
-      // need to check if we find any matching url https://playit.gg/mc/<code>" using regex
-      const logs = await container.getLogs();
-      const regex = /https:\/\/playit\.gg\/mc\/([a-f0-9]+)/gi;
-      const matches = [...logs.matchAll(regex)];
-      // get last match if any exist
-      if(matches && matches.length > 0) {
-        const lastMatch = matches[matches.length - 1];
-        const code = lastMatch[1];
-        return { type: "warning", message: "not connected go to https://playit.gg/mc/" + code + " to connect" };
-      } else {
-        return { type: "warning", message: "playit.gg is in an unknown state" };
-      }
-    },
-  },
 ] as const;
+
+type CloudflareTunnelStatus = {
+  configured: boolean;
+  hostname?: string;
+  status: 'not-configured' | 'server-stopped' | 'pending' | 'connected' | 'error';
+  message: string;
+  logs?: string[];
+};
 
 export class MinecraftContainer extends Container {
 
@@ -116,10 +67,14 @@ export class MinecraftContainer extends Container {
         TS_EXTRA_ARGS: "--advertise-exit-node",
         TS_ENABLE_HEALTH_CHECK: "true",
         TS_LOCAL_ADDR_PORT: "0.0.0.0:25565",
-        
+
         // Minecraft server configuration
         TYPE: "PAPER",
         VERSION: "1.21.8", // Default version, will be updated from state on start
+        FORGE_VERSION: "",
+        FABRIC_LOADER_VERSION: "",
+        FABRIC_INSTALLER_VERSION: "",
+        NEOFORGE_VERSION: "",
         EULA: "TRUE",
         SERVER_HOST: "0.0.0.0",
         ONLINE_MODE: "false",
@@ -142,6 +97,8 @@ export class MinecraftContainer extends Container {
         // Bucket for world data backups (uses same bucket as Dynmap by default)
         DATA_BUCKET_NAME: (this.env as Env).DATA_BUCKET_NAME || (this.env as Env).DYNMAP_BUCKET_NAME,
         OPTIONAL_PLUGINS: this.pluginFilenamesToEnable.join(" "), // space separated for consumption by bash script start-with-services.sh
+        CLOUDFLARE_TUNNEL_TOKEN: "null",
+        CLOUDFLARE_TUNNEL_HOSTNAME: (this.env as Env).CLOUDFLARE_TUNNEL_HOSTNAME || "",
     };
     
   
@@ -156,7 +113,7 @@ export class MinecraftContainer extends Container {
             id    INTEGER PRIMARY KEY,
             json_data BLOB
           );
-          INSERT OR IGNORE INTO state (id, json_data) VALUES (1, jsonb('{"optionalPlugins": ["playit-minecraft-plugin"], "serverVersion": "1.21.8"}'));
+          INSERT OR IGNORE INTO state (id, json_data) VALUES (1, jsonb('{"optionalPlugins": [], "serverProfileId": "paper-1-21-8", "serverVersion": "1.21.8"}'));
           CREATE TABLE IF NOT EXISTS auth (
             id INTEGER PRIMARY KEY,
             salt TEXT,
@@ -188,6 +145,7 @@ export class MinecraftContainer extends Container {
         this._container = ctx.container;
         // Initialize SQL immediately so we can synchronously determine password status
         this._initializeSql();
+        this.applyServerProfileEnv(this.getSelectedServerProfile());
         try {
           const result = this._sql.exec("SELECT 1 as ok FROM auth LIMIT 1;").one();
           this._isPasswordSet = result?.ok === 1;
@@ -197,6 +155,11 @@ export class MinecraftContainer extends Container {
         this.ctx.waitUntil((this.env as Env).TS_AUTHKEY.get().then(authkey => {
           if(authkey) {
             this.envVars.TS_AUTHKEY = authkey;
+          }
+        }));
+        this.ctx.waitUntil((this.env as Env).CLOUDFLARE_TUNNEL_TOKEN.get().then(token => {
+          if(token) {
+            this.envVars.CLOUDFLARE_TUNNEL_TOKEN = token;
           }
         }));
         this.ctx.waitUntil(this.getStatus().then(async status => {
@@ -272,7 +235,7 @@ export class MinecraftContainer extends Container {
     }
 
     // Set configured environment variables for a specific plugin
-    private setConfiguredPluginEnv(filename: string, env: Record<string, string>): void {
+  private setConfiguredPluginEnv(filename: string, env: Record<string, string>): void {
       this.ctx.storage.transactionSync(() => {
         // Read current env for this plugin
         const current = this.getConfiguredPluginEnv(filename);
@@ -314,34 +277,63 @@ export class MinecraftContainer extends Container {
       return spec ? [...spec.requiredEnv] : [];
     }
 
+    private getSelectedServerProfile(): ServerProfile {
+      try {
+        const result = this._sql.exec(
+          `SELECT json_data->>'$.serverProfileId' AS profileId, json_data->>'$.serverVersion' AS legacyVersion FROM state WHERE id = 1;`
+        ).one();
+        const profileId = (result?.profileId as string) ?? '';
+        if (profileId && SERVER_PROFILE_MAP.has(profileId)) {
+          return SERVER_PROFILE_MAP.get(profileId)!;
+        }
+        const legacyVersion = (result?.legacyVersion as string) ?? '';
+        if (legacyVersion) {
+          const match = SERVER_PROFILES.find(profile => profile.minecraftVersion === legacyVersion);
+          if (match) {
+            return match;
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load server profile from state:', error);
+      }
+      return SERVER_PROFILE_MAP.get(DEFAULT_SERVER_PROFILE_ID)!;
+    }
+
+    private saveServerProfile(profile: ServerProfile) {
+      this._sql.exec(
+        `UPDATE state SET json_data = jsonb_patch(json_data, jsonb(?)) WHERE id = 1`,
+        JSON.stringify({ serverProfileId: profile.id, serverVersion: profile.minecraftVersion })
+      );
+      this.applyServerProfileEnv(profile);
+    }
+
+    private applyServerProfileEnv(profile: ServerProfile) {
+      this.envVars.TYPE = profile.type;
+      this.envVars.VERSION = profile.minecraftVersion;
+      this.envVars.FORGE_VERSION = '';
+      this.envVars.FABRIC_INSTALLER_VERSION = '';
+      this.envVars.FABRIC_LOADER_VERSION = '';
+      this.envVars.NEOFORGE_VERSION = '';
+
+      if (profile.type === 'FORGE') {
+        this.envVars.FORGE_VERSION = profile.minecraftVersion;
+      } else if (profile.type === 'FABRIC') {
+        this.envVars.FABRIC_INSTALLER_VERSION = profile.fabric?.installerVersion ?? '';
+        this.envVars.FABRIC_LOADER_VERSION = profile.fabric?.loaderVersion ?? '';
+      } else if (profile.type === 'NEOFORGE') {
+        this.envVars.NEOFORGE_VERSION = profile.neoforgeVersion ?? '';
+      }
+    }
+
     // =====================
     // Server Version Management
     // =====================
-
-    private static readonly SUPPORTED_VERSIONS = ["1.21.7", "1.21.8", "1.21.10"] as const;
-    private static readonly VERSION_LABELS: Record<string, "legacy" | "stable" | "experimental"> = {
-      "1.21.7": "legacy",
-      "1.21.8": "stable",
-      "1.21.10": "experimental",
-    };
 
     /**
      * Get the currently configured Minecraft server version
      */
     public async getServerVersion(): Promise<{ version: string }> {
-      try {
-        const result = this._sql.exec(
-          `SELECT COALESCE(json_data->>'$.serverVersion', '1.21.8') as version FROM state WHERE id = 1;`
-        ).one();
-        if (!result) {
-          return { version: "1.21.8" };
-        }
-        const version = result.version as string;
-        return { version };
-      } catch (error) {
-        console.error("Failed to get server version:", error);
-        return { version: "1.21.8" };
-      }
+      return { version: this.getSelectedServerProfile().id };
     }
 
     /**
@@ -349,8 +341,9 @@ export class MinecraftContainer extends Container {
      */
     public async setServerVersion({ version }: { version: string }): Promise<{ success: boolean; version: string }> {
       // Validate version
-      if (!MinecraftContainer.SUPPORTED_VERSIONS.includes(version as any)) {
-        throw new Error(`Unsupported version: ${version}. Supported versions: ${MinecraftContainer.SUPPORTED_VERSIONS.join(", ")}`);
+      const profile = SERVER_PROFILE_MAP.get(version);
+      if (!profile) {
+        throw new Error("Unsupported server profile");
       }
 
       // Check if server is stopped
@@ -361,12 +354,9 @@ export class MinecraftContainer extends Container {
 
       // Update version in state
       try {
-        this._sql.exec(
-          `UPDATE state SET json_data = jsonb_patch(json_data, jsonb(?)) WHERE id = 1`,
-          JSON.stringify({ serverVersion: version })
-        );
-        console.error(`Server version updated to ${version}`);
-        return { success: true, version };
+        this.saveServerProfile(profile);
+        console.error(`Server profile updated to ${profile.id}`);
+        return { success: true, version: profile.id };
       } catch (error) {
         console.error("Failed to set server version:", error);
         throw new Error("Failed to update server version");
@@ -443,6 +433,7 @@ export class MinecraftContainer extends Container {
       this.stopping = false
       console.error("Container start triggered");
       this._initializeSql();
+      this.applyServerProfileEnv(this.getSelectedServerProfile());
       const newOptionalPlugins = this.pluginFilenamesToEnable.join(" ");
       if(newOptionalPlugins !== this.envVars.OPTIONAL_PLUGINS) {
         this.envVars.OPTIONAL_PLUGINS = this.pluginFilenamesToEnable.join(" ");
@@ -1323,8 +1314,8 @@ export class MinecraftContainer extends Container {
       configuredEnv: Record<string, string>;
       status: PluginStatus;
     }>> {
-      const enabledPlugins = this.envVars.OPTIONAL_PLUGINS.split(" ");
-      const desiredPlugins = await this.pluginFilenamesToEnable;
+      const enabledPlugins = this.envVars.OPTIONAL_PLUGINS.trim() ? this.envVars.OPTIONAL_PLUGINS.split(" ").filter(Boolean) : [];
+      const desiredPlugins = (await this.pluginFilenamesToEnable).filter(Boolean);
       const allPlugins = await this.listAllPlugins();
       
       // Resolve all plugin statuses in parallel
@@ -1355,6 +1346,86 @@ export class MinecraftContainer extends Container {
       );
       
       return pluginsWithStatus;
+    }
+
+    public async getCloudflareTunnelStatus(): Promise<CloudflareTunnelStatus> {
+      const hostname = ((this.env as Env).CLOUDFLARE_TUNNEL_HOSTNAME || '').trim() || undefined;
+      const tokenConfigured = typeof this.envVars.CLOUDFLARE_TUNNEL_TOKEN === 'string' && this.envVars.CLOUDFLARE_TUNNEL_TOKEN !== 'null';
+
+      if (!tokenConfigured) {
+        return {
+          configured: false,
+          hostname,
+          status: 'not-configured',
+          message: 'Add a CLOUDFLARE_TUNNEL_TOKEN secret to expose Minecraft over your Cloudflare domain.'
+        };
+      }
+
+      const containerStatus = await this.getStatus();
+      if (containerStatus !== 'running') {
+        return {
+          configured: true,
+          hostname,
+          status: 'server-stopped',
+          message: 'Start the server to bring the Cloudflare Tunnel online.'
+        };
+      }
+
+      try {
+        const logContent = await this.getFileContents('/logs/cloudflare-tunnel.log');
+        if (!logContent) {
+          return {
+            configured: true,
+            hostname,
+            status: 'pending',
+            message: 'Tunnel log not available yet. It usually appears within a few seconds after launch.',
+            logs: []
+          };
+        }
+
+        const lines = logContent
+          .split(/\r?\n/)
+          .map(line => line.trim())
+          .filter(Boolean);
+        const tailLines = lines.slice(-10);
+        const normalizedTail = tailLines.join(' ').toLowerCase();
+
+        if (/registered tunnel connection|connection ([0-9a-f-]+ )?registered|connected to/i.test(normalizedTail)) {
+          return {
+            configured: true,
+            hostname,
+            status: 'connected',
+            message: hostname ? `Use ${hostname}:25565 in Minecraft to join via Cloudflare.` : 'Tunnel connected. Update CLOUDFLARE_TUNNEL_HOSTNAME to show a server address.',
+            logs: tailLines
+          };
+        }
+
+        if (/err |error|failed|permission/i.test(normalizedTail)) {
+          return {
+            configured: true,
+            hostname,
+            status: 'error',
+            message: 'Cloudflare Tunnel reported an error. Open the logs for specifics.',
+            logs: tailLines
+          };
+        }
+
+        return {
+          configured: true,
+          hostname,
+          status: 'pending',
+          message: 'Cloudflare Tunnel is starting. It typically connects within a minute.',
+          logs: tailLines
+        };
+      } catch (error) {
+        console.error('Failed to read Cloudflare Tunnel logs:', error);
+        return {
+          configured: true,
+          hostname,
+          status: 'error',
+          message: 'Unable to read Cloudflare Tunnel logs. Check the container logs for details.',
+        };
+      }
     }
 
     async broadcast(message: ArrayBuffer | string) {

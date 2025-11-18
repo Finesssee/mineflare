@@ -1,28 +1,21 @@
 # syntax=docker/dockerfile:1.6
 
 # Multi-version Paper Minecraft container
-# This image includes all supported Paper versions (1.21.7, 1.21.8, 1.21.10)
+# This image includes all supported Paper versions (1.21.10, 1.21.8, 1.21.7, 1.20.6, 1.19.4)
 # The VERSION environment variable selects which version to run at runtime
 
 # Stage for Paper installation - install all supported versions
 FROM itzg/minecraft-server:latest AS paper-install
-RUN mkdir -p /opt/minecraft/server/1.21.7 && /usr/bin/mc-image-helper install-paper \
-    --project=paper \
-    --version=1.21.7 \
-    --output-directory=/opt/minecraft/server/1.21.7 \
-    --results-file=/opt/minecraft/server/1.21.7/.paper-1.21.7.env
-
-RUN mkdir -p /opt/minecraft/server/1.21.8 && /usr/bin/mc-image-helper install-paper \
-    --project=paper \
-    --version=1.21.8 \
-    --output-directory=/opt/minecraft/server/1.21.8 \
-    --results-file=/opt/minecraft/server/1.21.8/.paper-1.21.8.env
-
-RUN mkdir -p /opt/minecraft/server/1.21.10 && /usr/bin/mc-image-helper install-paper \
-    --project=paper \
-    --version=1.21.10 \
-    --output-directory=/opt/minecraft/server/1.21.10 \
-    --results-file=/opt/minecraft/server/1.21.10/.paper-1.21.10.env
+ARG PAPER_VERSIONS="1.21.10 1.21.8 1.21.7 1.20.6 1.19.4"
+RUN set -eux; \
+    for VERSION in $PAPER_VERSIONS; do \
+        mkdir -p /opt/minecraft/server/${VERSION} && \
+        /usr/bin/mc-image-helper install-paper \
+          --project=paper \
+          --version=${VERSION} \
+          --output-directory=/opt/minecraft/server/${VERSION} \
+          --results-file=/opt/minecraft/server/${VERSION}/.paper-${VERSION}.env; \
+    done
 
 # Final stage - main image
 FROM itzg/minecraft-server:latest
@@ -98,13 +91,14 @@ ARG TARGETARCH
 COPY chrome-x64.tar.gz chrome-arm64.tar.gz /tmp/
 
 # Select the correct binaries for the target architecture, move them to /usr/local/bin,
-# and then clean up the temporary files. This is done in a single RUN command to
-# ensure the unused binaries are not left in an intermediate layer.
+# install cloudflared, and then clean up the temporary files. This is done in a single RUN
+# command to ensure the unused binaries are not left in an intermediate layer.
 RUN set -eux; \
     arch_suffix=''; \
+    cloudflared_arch=''; \
     case "$TARGETARCH" in \
-        "amd64") arch_suffix='x64' ;; \
-        "arm64") arch_suffix='arm64' ;; \
+        "amd64") arch_suffix='x64'; cloudflared_arch='amd64' ;; \
+        "arm64") arch_suffix='arm64'; cloudflared_arch='arm64' ;; \
         *) echo "Unsupported architecture: $TARGETARCH"; exit 1 ;; \
     esac; \
     mv "/tmp/http-proxy-$arch_suffix" /usr/local/bin/http-proxy; \
@@ -118,6 +112,8 @@ RUN set -eux; \
     mkdir -p /opt/chrome; \
     tar -xzf "/tmp/chrome-$arch_suffix.tar.gz" -C /opt/chrome; \
     chmod -R 755 /opt/chrome; \
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cloudflared_arch}" -o /usr/local/bin/cloudflared; \
+    chmod +x /usr/local/bin/cloudflared; \
     rm -rf /tmp/*
 
 COPY CLAUDE.md /data/CLAUDE.md

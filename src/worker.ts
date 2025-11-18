@@ -6,6 +6,7 @@ import cors from "@elysiajs/cors";
 import { getNodeEnv } from "./client/utils/node-env";
 import { asyncLocalStorage, getMinecraftContainer } from "./server/get-minecraft-container";
 import { authApp, requireAuth, decryptToken, getSymKeyCached } from "./server/auth";
+import { SERVER_PROFILES, SERVER_PROFILE_MAP } from "./shared/serverProfiles";
 
 const env = workerEnv as typeof worker.Env;
 
@@ -210,6 +211,23 @@ const elysiaApp = (
     }
   })
 
+  .get("/connection-info", async () => {
+    try {
+      const container = getMinecraftContainer();
+      const status = await container.getCloudflareTunnelStatus();
+      return status;
+    } catch (error) {
+      console.error("Failed to get Cloudflare Tunnel status:", error);
+      return {
+        configured: false,
+        hostname: env.CLOUDFLARE_TUNNEL_HOSTNAME || '',
+        status: 'error',
+        message: 'Unable to load Cloudflare Tunnel status. Check worker logs for details.',
+        logs: [] as string[],
+      };
+    }
+  })
+
   /**
    * Get the current Minecraft server version configuration
    */
@@ -218,38 +236,38 @@ const elysiaApp = (
       const container = getMinecraftContainer();
       const { version } = await container.getServerVersion();
       const status = await container.getStatus();
-      
-      // Version labels
-      const versionLabels: Record<string, "legacy" | "stable" | "experimental"> = {
-        "1.21.7": "legacy",
-        "1.21.8": "stable",
-        "1.21.10": "experimental",
-      };
-      
-      const supported = [
-        { version: "1.21.7", label: "legacy" as const },
-        { version: "1.21.8", label: "stable" as const },
-        { version: "1.21.10", label: "experimental" as const },
-      ];
-      
+
+      const profile = SERVER_PROFILE_MAP.get(version);
+      const supported = SERVER_PROFILES.map(profile => ({
+        version: profile.id,
+        label: profile.label,
+        minecraftVersion: profile.minecraftVersion,
+        name: profile.name,
+        description: profile.description,
+        type: profile.type,
+      }));
+
       return {
         version,
-        label: versionLabels[version] || "unknown",
+        label: profile?.label ?? 'unknown',
         supported,
         canChange: status === 'stopped'
       };
     } catch (error) {
       console.error("Failed to get version:", error);
-      return { 
-        version: "1.21.8", 
-        label: "stable",
-        supported: [
-          { version: "1.21.7", label: "legacy" as const },
-          { version: "1.21.8", label: "stable" as const },
-          { version: "1.21.10", label: "experimental" as const },
-        ],
+      return {
+        version: "paper-1-21-8",
+        label: 'unknown',
+        supported: SERVER_PROFILES.map(profile => ({
+          version: profile.id,
+          label: profile.label,
+          minecraftVersion: profile.minecraftVersion,
+          name: profile.name,
+          description: profile.description,
+          type: profile.type,
+        })),
         canChange: false,
-        error: "Failed to get version" 
+        error: "Failed to get version"
       };
     }
   })

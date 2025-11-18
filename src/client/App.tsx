@@ -4,6 +4,7 @@ import { useServerData } from './hooks/useServerData';
 import { Terminal } from './components/Terminal';
 import { Minimap } from './components/Minimap';
 import { Plugins } from './components/Plugins';
+import { StatusAlerts } from './components/StatusAlerts';
 import { Login } from './components/Login';
 import { useAuth } from './hooks/useAuth';
 import { SessionTimer } from './components/SessionTimer';
@@ -25,7 +26,7 @@ export function App() {
   const isDebugMode = new URLSearchParams(window.location.search).get('debug') === 'true';
   
   // Only start polling server data when authenticated
-  const { status, players, info, plugins, loading, error, serverState, startupStep, serverVersion, supportedVersions, canChangeVersion, startServer, stopServer, refresh, togglePlugin, updateVersion } = useServerData(auth.authenticated);
+  const { status, players, info, plugins, connectionInfo, loading, error, serverState, startupStep, serverVersion, supportedVersions, canChangeVersion, startServer, stopServer, refresh, togglePlugin, updateVersion } = useServerData(auth.authenticated);
 
   // Show login overlay if not authenticated
   if (!auth.authenticated) {
@@ -368,6 +369,8 @@ export function App() {
           }
         `}</style>
 
+        <StatusAlerts connectionInfo={connectionInfo} errorMessage={error} />
+
         {/* Stats Bar */}
         <div style={{
           display: 'flex',
@@ -491,7 +494,12 @@ export function App() {
         <div className="responsive-grid">
           {/* First Row: Server Status and Server Plugins (50/50) */}
           <ServerStatus status={status} info={info} serverState={serverState} startupStep={startupStep} />
-          <Plugins plugins={plugins} serverState={serverState} onPluginToggle={togglePlugin} />
+          <Plugins 
+            plugins={plugins} 
+            serverState={serverState} 
+            onPluginToggle={togglePlugin}
+            connectionInfo={connectionInfo}
+          />
           
           {/* Second Row: Version Selector and Session Timer (50/50) */}
           <VersionSelector 

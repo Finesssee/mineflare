@@ -56,11 +56,25 @@ export interface PluginsResponse {
   plugins: Plugin[];
 }
 
-export type VersionLabel = 'legacy' | 'stable' | 'experimental';
+export type TunnelStatus = 'not-configured' | 'server-stopped' | 'pending' | 'connected' | 'error';
+
+export interface ConnectionInfo {
+  configured: boolean;
+  hostname?: string;
+  status: TunnelStatus;
+  message: string;
+  logs?: string[];
+}
+
+export type VersionLabel = 'legacy' | 'stable' | 'experimental' | 'modded' | 'unknown';
 
 export interface SupportedVersion {
   version: string;
   label: VersionLabel;
+  minecraftVersion: string;
+  name: string;
+  description: string;
+  type: 'PAPER' | 'FORGE' | 'FABRIC' | 'NEOFORGE';
 }
 
 export interface VersionResponse {

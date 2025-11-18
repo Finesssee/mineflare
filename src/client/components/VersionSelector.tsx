@@ -37,8 +37,25 @@ export function VersionSelector({ currentVersion, supportedVersions, serverState
         return { text: 'Stable', color: '#57A64E', gradient: 'linear-gradient(135deg, #57A64E 0%, #6BB854 100%)' };
       case 'experimental':
         return { text: 'Experimental', color: '#FFB600', gradient: 'linear-gradient(135deg, #FFB600 0%, #FFC933 100%)' };
+      case 'modded':
+        return { text: 'Modded', color: '#FF6B6B', gradient: 'linear-gradient(135deg, #FF6B6B 0%, #FFC1C1 100%)' };
       default:
         return { text: label, color: '#888', gradient: 'linear-gradient(135deg, #666 0%, #555 100%)' };
+    }
+  };
+
+  const getTypeBadge = (type: SupportedVersion['type']) => {
+    switch (type) {
+      case 'PAPER':
+        return { text: 'Paper', color: '#7AB3E8' };
+      case 'FORGE':
+        return { text: 'Forge', color: '#FF6B6B' };
+      case 'FABRIC':
+        return { text: 'Fabric', color: '#C792EA' };
+      case 'NEOFORGE':
+        return { text: 'NeoForge', color: '#FF8C42' };
+      default:
+        return { text: type, color: '#888' };
     }
   };
 
@@ -131,6 +148,7 @@ export function VersionSelector({ currentVersion, supportedVersions, serverState
       }}>
         {supportedVersions.map((sv) => {
           const labelInfo = getVersionLabel(sv.label);
+          const typeInfo = getTypeBadge(sv.type);
           const isSelected = sv.version === currentVersion;
           const isHovered = hoveredVersion === sv.version;
           const isClickable = canChange && !updating && !isSelected;
@@ -143,59 +161,92 @@ export function VersionSelector({ currentVersion, supportedVersions, serverState
               onMouseLeave={() => setHoveredVersion(null)}
               style={{
                 position: 'relative',
-                padding: '16px',
-                background: isSelected 
-                  ? 'rgba(87, 166, 78, 0.15)' 
+                padding: '18px',
+                background: isSelected
+                  ? 'rgba(87, 166, 78, 0.15)'
                   : 'rgba(255, 255, 255, 0.03)',
-                border: isSelected 
-                  ? '2px solid rgba(87, 166, 78, 0.5)' 
+                border: isSelected
+                  ? '2px solid rgba(87, 166, 78, 0.5)'
                   : '1px solid rgba(255, 255, 255, 0.1)',
                 borderRadius: '12px',
                 cursor: isClickable ? 'pointer' : 'default',
                 transition: 'all 0.2s ease',
                 opacity: (!canChange || updating) ? 0.6 : 1,
                 transform: isClickable && isHovered ? 'translateY(-2px)' : 'translateY(0)',
-                boxShadow: isClickable && isHovered 
-                  ? '0 4px 12px rgba(87, 166, 78, 0.3)' 
+                boxShadow: isClickable && isHovered
+                  ? '0 6px 16px rgba(0, 0, 0, 0.35)'
                   : 'none',
               }}
             >
               <div style={{
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '8px',
-                alignItems: 'center',
+                gap: '10px',
               }}>
                 <div style={{
-                  padding: '6px 12px',
-                  background: labelInfo.gradient,
-                  borderRadius: '6px',
-                  fontSize: '0.75rem',
-                  fontWeight: '700',
-                  color: sv.label === 'legacy' ? '#fff' : '#000',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                  boxShadow: `0 2px 8px ${labelInfo.color}33`,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '8px',
                 }}>
-                  {labelInfo.text}
+                  <div style={{
+                    padding: '6px 10px',
+                    background: labelInfo.gradient,
+                    borderRadius: '6px',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    color: sv.label === 'legacy' ? '#fff' : '#000',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    boxShadow: `0 2px 8px ${labelInfo.color}33`,
+                  }}>
+                    {labelInfo.text}
+                  </div>
+                  <div style={{
+                    padding: '4px 10px',
+                    borderRadius: '999px',
+                    border: `1px solid ${typeInfo.color}55`,
+                    color: typeInfo.color,
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                  }}>
+                    {typeInfo.text}
+                  </div>
                 </div>
                 <div style={{
-                  fontSize: '1.125rem',
-                  fontWeight: '700',
+                  fontSize: '1.15rem',
+                  fontWeight: 700,
                   color: '#fff',
-                  fontFamily: 'monospace',
+                  minHeight: '48px',
                 }}>
-                  {sv.version}
+                  {sv.name}
+                </div>
+                <div style={{
+                  fontFamily: '"JetBrains Mono", monospace',
+                  fontSize: '0.9rem',
+                  color: '#9cd49c',
+                }}>
+                  Minecraft {sv.minecraftVersion}
+                </div>
+                <div style={{
+                  fontSize: '0.85rem',
+                  lineHeight: 1.4,
+                  color: '#ddd',
+                  minHeight: '48px',
+                }}>
+                  {sv.description}
                 </div>
                 {isSelected && (
                   <div style={{
                     fontSize: '0.75rem',
                     color: '#57A64E',
-                    fontWeight: '600',
+                    fontWeight: 600,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                   }}>
-                    ✓ Current
+                    ✓ Current selection
                   </div>
                 )}
               </div>
@@ -239,4 +290,3 @@ export function VersionSelector({ currentVersion, supportedVersions, serverState
     </div>
   );
 }
-

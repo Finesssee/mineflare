@@ -28,39 +28,81 @@ The Cloudflare free tier is not supported for Containers so you have an account 
 2. Click "Set Password" to secure your Server with a password
 3. Login with your credentials
 4. Click "Start Server" to launch the Minecraft container
-5. While you're waiting for the server to start up head over to https://playit.gg/ and sign up for a free account. DO NOT create an agent or a tunnel in playit.gg, this will be done automatically for you in step 6.
-6. Wait 2-3 minutes for the server to fully initialize
-7. Follow the playit.gg server address shown in the plugin panel to connect to your server via playit.gg
-8. Use your playit.gg server address `<some-name>.gl.joinmc.link` to connect to your Cloudflare Minecraft server
+5. While the server is booting, create a Cloudflare Tunnel that exposes `tcp://localhost:25565` on the hostname you want to use (see **Cloudflare Domain Access** below for a detailed walkthrough).
+6. Add the generated token as the `CLOUDFLARE_TUNNEL_TOKEN` secret and set `CLOUDFLARE_TUNNEL_HOSTNAME` to your domain. Redeploy or restart the worker so the container picks up the new credentials.
+7. Wait 2-3 minutes for the server to fully initialize. The dashboard will show a **Cloudflare Tunnel** card that turns green when the tunnel is connected.
+8. Connect from Minecraft using your Cloudflare hostname (for example `mc.example.com:25565`) and share that hostname with your friends.
+
+## 🌐 Cloudflare Domain Access
+
+The container now ships with `cloudflared`, so you can expose Minecraft directly from Cloudflare's network without third-party relays.
+
+1. Open the Cloudflare dashboard and go to **Zero Trust → Access → Tunnels**.
+2. Create a **Cloudflared** tunnel, choose a name (e.g., `mineflare-mc`), and add a public hostname such as `mc.example.com`.
+3. Set the service for that hostname to `tcp://localhost:25565`. Cloudflare converts the raw TCP traffic into the secure connection to your container.
+4. Copy the one-time tunnel token that Cloudflare generates.
+5. In your deployment pipeline (`bun run configure` or the Cloudflare dashboard), set the following variables:
+   - `CLOUDFLARE_TUNNEL_TOKEN` (secret) – paste the token from step 4
+   - `CLOUDFLARE_TUNNEL_HOSTNAME` – the hostname you mapped in step 2 (e.g., `mc.example.com`)
+6. Redeploy or restart the worker. The Mineflare dashboard will display the Cloudflare Tunnel status, including recent logs.
+7. Once the status shows **Connected**, join the server from Minecraft using `your-hostname:25565`.
 <img width="795" height="490" alt="image" src="https://github.com/user-attachments/assets/303c4a07-8411-4487-acce-9ee23dfef526" />
 
 <img width="850" height="475" alt="image" src="https://github.com/user-attachments/assets/2af59c0c-c5e0-485f-b8ba-1af472dd9094" />
 
 ## 🎮 Minecraft Version Support
 
-Mineflare supports multiple Paper Minecraft versions in a single deployment:
+Mineflare now ships with sixteen curated profiles:
 
-- **1.21.7** (Legacy) - Older stable release for maximum compatibility
-- **1.21.8** (Stable) - Recommended for most users, default version
-- **1.21.10** (Experimental) - Latest features, may have stability issues
+| Profile | Loader | Label | Notes |
+|--------|--------|-------|-------|
+| Paper 1.21.10 | Paper | Experimental | Latest Paper builds with bleeding-edge gameplay (expect the fastest updates). |
+| Paper 1.21.8 *(default)* | Paper | Stable | Recommended for most servers; balanced performance + compatibility. |
+| Paper 1.21.7 | Paper | Legacy | Paper build for plugins that haven’t moved past 1.21.7. |
+| Paper 1.20.6 | Paper | Legacy | Long-term support release for established plugin stacks. |
+| Paper 1.19.4 | Paper | Legacy | Ideal for older adventure maps and plugin ecosystems that have not migrated to 1.20+. |
+| Forge 1.20.1 | Forge | Modded | Popular line for large modpacks. Downloads Forge + libraries on first boot. |
+| Forge 1.19.2 | Forge | Modded | Modern Create/All The Mods packs still target this long-lived Forge build. |
+| Forge 1.18.2 | Forge | Modded | Adventure/RPG modpacks frequently pin this Forge baseline. |
+| Forge 1.16.5 | Forge | Modded | Classic kitchen-sink packs (FTB, Valhelsia) stay here for legacy mods. |
+| NeoForge 1.21.1 | NeoForge | Modded | Modern NeoForge line for bleeding-edge 1.21.x modpacks. |
+| NeoForge 1.20.4 | NeoForge | Modded | Stable NeoForge branch covering the latest Create/questing packs. |
+| NeoForge 1.20.1 | NeoForge | Modded | Lets long-lived 1.20.1 NeoForge packs run without redeploying. |
+| Fabric 1.21.1 | Fabric | Modded | Lightweight Fabric loader. Includes pinned loader/installer versions. |
+| Fabric 1.20.1 | Fabric | Modded | Quilt-compatible Fabric stack, perfect for Sodium/Lithium setup. |
+| Fabric 1.19.2 | Fabric | Modded | Performance-focused SMPs and modpacks targeting the 1.19 cycle. |
+| Fabric 1.18.2 | Fabric | Modded | Great for Create/Fabric hybrids that rely on this version. |
 
-**Switching Versions:**
-1. Stop your server using the "Stop Server" button
-2. Select your desired version in the "Minecraft Version" panel
-3. Click to switch (takes a few seconds)
-4. Start your server - it will boot with the new version
+**Switching Profiles:**
+1. Stop your server using the "Stop Server" button.
+2. Pick a profile in the "Minecraft Version" card (modded options are tagged in red).
+3. Click to apply – state updates instantly without wiping your world files.
+4. Start the server. Modded profiles download their distribution during the next startup.
 
-⚠️ **Important:** Always backup your world before switching versions. Downgrading versions may not be fully supported and could cause world compatibility issues.
+⚠️ **Important:** Always backup your world before switching profiles. Downgrading between vanilla/modded can corrupt chunks if you load them with different content.
+
+### 🧩 Modded Servers (Forge, Fabric & NeoForge)
+
+The new modded presets make Cloudflare Containers viable for modpacks:
+
+1. Choose any Forge (1.16.5 / 1.18.2 / 1.19.2 / 1.20.1), Fabric (1.18.2 / 1.19.2 / 1.20.1 / 1.21.1), or NeoForge (1.20.1 / 1.20.4 / 1.21.1) profile in the version selector (server must be stopped).
+2. Upload your mods/datapacks to `/data/mods` and `/data/config` using the built-in file browser, `mineflare` CLI, or your preferred MCP terminal.
+3. Start the server – the Forge/Fabric/NeoForge installer runs on boot and consumes whatever you placed under `/data/mods`.
+4. When updating modpacks, stop the server, change the files, and start it again.
+
+First boot after switching to a modded profile can take several minutes while Forge/Fabric/NeoForge download their runtime. Subsequent restarts reuse the cached artifacts stored in `/data`.
 
 ## ✨ Features
 
 - **🚀 Serverless Infrastructure** - Built on Cloudflare Workers, Containers, Durable Objects and R2
-- **🎮 Full Minecraft Server** - Paper server with multi-version support (1.21.7, 1.21.8, 1.21.10)
+- **🎮 Full Minecraft Server** - Paper/Forge/Fabric/NeoForge multi-version server out of the box
 - **🔄 Version Selector** - Switch between Legacy, Stable, and Experimental Minecraft versions without losing data
 - **🗺️ Live Mini-Map** - Integrated web Mini-Map on R2 storage
 - **🔐 Authentication** - Secure cookie-based auth with encrypted tokens
 - **💻 Web Terminal** - Real-time Minecraft control console via WebSocket
 - **🔌 Plugin Management** - Enable/disable plugins through web UI
+- **🧩 Modded Profiles** - One click Forge/Fabric/NeoForge presets (drop mods into `/data/mods`)
+- **🌐 Cloudflare Domains** - Use your own hostname via Cloudflare Tunnel with zero extra binaries
 - **💤 Auto-Sleep** - Containers sleep after 20 minutes of inactivity to save resources
 - **📊 Real-time Monitoring** - Server status, player list, and performance metrics
 
@@ -77,21 +119,15 @@ Mineflare supports multiple Paper Minecraft versions in a single deployment:
 
 ## Alternative Networking Options
 
-If you do not want to use playit.gg, you can use Tailscale or Cloudflare Tunnels for super secure private networking but it's harder to share with friends.
+Cloudflare Tunnels are now the default way to expose Mineflare over the public internet. If you prefer a private network, you can still fall back to Tailscale.
 
-### Using Tailscale for super secure private networking
+### Using Tailscale for private networking
 
-These instructions are only if you do not want to use playit.gg and want to use Tailscale for private networking instead.
-
-1. Disable the playit.gg plugin in the plugin panel
-2. Generate a Tailscale authentication key in your Tailscale account settings
-3. Create a TS_AUTHKEY *build* secret in your mineflare worker on Cloudflare and re-deploy your worker
-4. Look in your tailscale dashboard for a new node called "cloudchamber", grab the private IP address
-5. Create a new server in Minecraft using the address `<tailscale private ip>` and connect to your Cloudflare Minecraft server
-
-### Using Cloudflare Tunnels for super secure private networking
-
-Instructions coming soon....
+1. Leave `CLOUDFLARE_TUNNEL_TOKEN` unset so no public hostname is created.
+2. Generate a Tailscale authentication key in your Tailscale account settings.
+3. Create a `TS_AUTHKEY` *build* secret in your Mineflare worker on Cloudflare and redeploy.
+4. Look in your Tailscale dashboard for a new node called "cloudchamber" and copy the private IP address.
+5. Connect from Minecraft using the Tailscale IP (`<tailscale-private-ip>:25565`).
 
 
 ## Local Development
@@ -144,12 +180,16 @@ TS_AUTHKEY=your_tailscale_key
 
 # Optional: Alchemy password for state encryption
 ALCHEMY_PASSWORD=your_secure_password
+
+# Optional: Cloudflare Tunnel for public access
+CLOUDFLARE_TUNNEL_TOKEN=copy_from_cloudflare_zero_trust
+CLOUDFLARE_TUNNEL_HOSTNAME=mc.example.com
 ```
 
 ### Container Settings
 
 Configure via the web UI:
-- **Minecraft Version** - Switch between 1.21.7 (Legacy), 1.21.8 (Stable), 1.21.10 (Experimental)
+- **Minecraft Version** - Pick any Paper/Forge/Fabric/NeoForge profile shown in the dashboard
 - **Plugin Management** - Enable/disable optional plugins when server is stopped
 
 Advanced settings in `src/container.ts`:
@@ -163,7 +203,7 @@ Mineflare supports optional Minecraft plugins that can be enabled/disabled via t
 
 **Built-in Plugins:**
 - **Dynmap** - Always enabled, provides live web-based map
-- **playit.gg** - Optional tunnel service for external access
+- Additional optional plugins can be added by dropping `.jar` files into `container_src/optional_plugins`
 
 **Adding Custom Plugins:**
 
@@ -179,7 +219,7 @@ bun run build
 ./docker_src/build-container-services.sh
 
 # Build single multi-version container image with all Paper versions
-# Includes 1.21.7, 1.21.8, and 1.21.10 in one image
+# Includes 1.19.4, 1.20.6, 1.21.7, 1.21.8, and 1.21.10 in one image
 # Builds for both amd64 and arm64 architectures
 bun ./docker_src/build.ts
 
@@ -194,7 +234,7 @@ bun run version
 
 The container build system (`docker_src/build.ts`) creates a single multi-version image:
 
-- Builds one container image containing all three Paper versions (1.21.7, 1.21.8, 1.21.10)
+- Builds one container image containing five Paper versions (1.21.10, 1.21.8, 1.21.7, 1.20.6, 1.19.4)
 - Multi-platform support (linux/amd64, linux/arm64)
 - Includes version-specific Dynmap plugins for all Paper versions
 - Uses Docker buildx with registry caching for fast rebuilds
@@ -232,4 +272,3 @@ For issues and feature requests, please use the [GitHub issue tracker](https://g
 ---
 
 Made with ☁️ by [eastlondoner](https://github.com/eastlondoner)
-

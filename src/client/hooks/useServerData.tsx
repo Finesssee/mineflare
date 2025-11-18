@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import type { ServerStatus, PlayerResponse, ServerInfo, Plugin, VersionResponse, SupportedVersion } from '../types/api';
+import type { ServerStatus, PlayerResponse, ServerInfo, Plugin, VersionResponse, SupportedVersion, ConnectionInfo } from '../types/api';
 import { fetchWithAuth } from '../utils/api';
 
 type ServerState = 'stopped' | 'starting' | 'running' | 'stopping';
@@ -9,16 +9,13 @@ export function useServerData(isAuthenticated: boolean) {
   const [players, setPlayers] = useState<string[]>([]);
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [plugins, setPlugins] = useState<Plugin[]>([]);
+  const [connectionInfo, setConnectionInfo] = useState<ConnectionInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [serverState, setServerState] = useState<ServerState>('stopped');
   const [startupStep, setStartupStep] = useState<string | null>(null);
-  const [serverVersion, setServerVersion] = useState<string>('1.21.8');
-  const [supportedVersions, setSupportedVersions] = useState<SupportedVersion[]>([
-    { version: '1.21.7', label: 'legacy' },
-    { version: '1.21.8', label: 'stable' },
-    { version: '1.21.10', label: 'experimental' },
-  ]);
+  const [serverVersion, setServerVersion] = useState<string>('paper-1-21-8');
+  const [supportedVersions, setSupportedVersions] = useState<SupportedVersion[]>([]);
   const [canChangeVersion, setCanChangeVersion] = useState(false);
   
   // Track active fetch calls for concurrency safety
@@ -152,6 +149,19 @@ export function useServerData(isAuthenticated: boolean) {
     }
   }, [serverState]);
 
+  const fetchConnectionInfo = useCallback(async () => {
+    try {
+      const response = await fetchWithAuth('/api/connection-info');
+      if (!response.ok) {
+        return;
+      }
+      const result = await response.json() as ConnectionInfo;
+      setConnectionInfo(result);
+    } catch (error) {
+      console.warn('Failed to fetch connection info:', error);
+    }
+  }, []);
+
   const startServer = async () => {
     setServerState('starting');
     setError(null);
@@ -208,10 +218,11 @@ export function useServerData(isAuthenticated: boolean) {
       const response = await fetchWithAuth('/api/plugins');
       const data = await response.json() as { plugins: Plugin[] };
       setPlugins(data.plugins || []);
+      await fetchConnectionInfo();
     } catch (err) {
       console.error('Failed to fetch plugins:', err);
     }
-  }, []);
+  }, [fetchConnectionInfo]);
 
   const togglePlugin = useCallback(async (filename: string, enabled: boolean) => {
     try {
@@ -301,6 +312,7 @@ export function useServerData(isAuthenticated: boolean) {
     players,
     info,
     plugins,
+    connectionInfo,
     loading,
     error,
     serverState,

@@ -142,7 +142,7 @@ const latestTag = `${REPO}:latest`;
 
 console.log(`\n=== Building Multi-Version Paper Container ===`);
 console.log(`Image: ${tag}`);
-console.log(`This image includes Paper versions: 1.21.7, 1.21.8, 1.21.10`);
+console.log(`This image includes Paper versions: 1.21.10, 1.21.8, 1.21.7, 1.20.6, 1.19.4`);
 
 // Check if image exists locally first; if not, try pulling from remote
 let imageExists = false;
@@ -212,7 +212,7 @@ if (!imageExists) {
 // Write the tag to .BASE_DOCKERFILE for Alchemy to consume
 await Bun.write(".BASE_DOCKERFILE", tag);
 console.log(`\n✓ Successfully wrote tag to .BASE_DOCKERFILE: ${tag}`);
-console.log(`\n✓ Built single multi-version image containing Paper 1.21.7, 1.21.8, and 1.21.10`);
+console.log(`\n✓ Built single multi-version image containing Paper 1.21.10, 1.21.8, 1.21.7, 1.20.6, and 1.19.4`);
 
 // Calculate hash of directory contents
 function hashDirectory(dirPath: string): string {

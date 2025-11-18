@@ -1,25 +1,22 @@
 import { useState } from 'preact/hooks';
-import type { Plugin } from '../types/api';
+import type { Plugin, ConnectionInfo } from '../types/api';
 import { fetchApi } from '../utils/api';
 
 interface Props {
   plugins: Plugin[];
   serverState: 'stopped' | 'starting' | 'running' | 'stopping';
   onPluginToggle: (filename: string, enabled: boolean) => Promise<void>;
+  connectionInfo?: ConnectionInfo | null;
 }
 
 const PLUGIN_INFO: Record<string, { emoji: string; description: string }> = {
   'Dynmap-3.7-beta-11-spigot': {
     emoji: '🗺️',
     description: 'DynMap powers the minimap feature and shows a live map of your world. Learn more at dynmap.wiki.gg'
-  },
-  'playit-minecraft-plugin': {
-    emoji: '🌐',
-    description: 'playit.gg allows you to connect your private servers to public URLs so that your friends can join your games.'
   }
 };
 
-export function Plugins({ plugins, serverState, onPluginToggle }: Props) {
+export function Plugins({ plugins, serverState, onPluginToggle, connectionInfo }: Props) {
   const [hoveredInfo, setHoveredInfo] = useState<string | null>(null);
   const [hoveredWarning, setHoveredWarning] = useState<string | null>(null);
   const [hoveredToggle, setHoveredToggle] = useState<string | null>(null);
@@ -182,6 +179,138 @@ export function Plugins({ plugins, serverState, onPluginToggle }: Props) {
 
   const canToggle = serverState === 'stopped';
 
+  const statusColors: Record<string, string> = {
+    connected: '#57A64E',
+    pending: '#FFB600',
+    error: '#FF4444',
+    'server-stopped': '#888888',
+    'not-configured': '#555555',
+  };
+
+  const renderConnectionCard = () => {
+    const info = connectionInfo;
+    const status = info?.status || 'not-configured';
+    const badgeColor = statusColors[status] || '#555555';
+    const docsHref = 'https://github.com/eastlondoner/mineflare#-cloudflare-domain-access';
+
+    return (
+      <div style={{
+        background: 'rgba(12, 24, 18, 0.8)',
+        border: '1px solid rgba(87, 166, 78, 0.4)',
+        borderRadius: '18px',
+        padding: '20px',
+        marginBottom: '18px',
+        boxShadow: '0 12px 30px rgba(0, 0, 0, 0.35)',
+        backdropFilter: 'blur(6px)',
+      }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '10px',
+        }}>
+          <div style={{
+            fontSize: '1.1rem',
+            fontWeight: 600,
+            color: '#D5F5D5',
+            letterSpacing: '0.5px',
+          }}>
+            Cloudflare Tunnel
+          </div>
+          <span style={{
+            padding: '6px 12px',
+            borderRadius: '999px',
+            fontSize: '0.75rem',
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            background: `${badgeColor}20`,
+            color: badgeColor,
+            border: `1px solid ${badgeColor}60`,
+          }}>
+            {status.replace('-', ' ')}
+          </span>
+        </div>
+        <div style={{
+          fontSize: '0.95rem',
+          lineHeight: 1.6,
+          color: '#dcdcdc',
+          marginBottom: '12px',
+        }}>
+          {info?.message || 'Configure a Cloudflare Tunnel token to use your own domain.'}
+        </div>
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+        }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontSize: '0.9rem',
+          }}>
+            <span style={{ color: '#9cd49c', fontWeight: 600 }}>Hostname</span>
+            <code style={{
+              background: 'rgba(255,255,255,0.05)',
+              borderRadius: '6px',
+              padding: '4px 10px',
+              border: '1px solid rgba(255,255,255,0.1)',
+              fontFamily: '"JetBrains Mono", monospace',
+              fontSize: '0.85rem',
+            }}>
+              {info?.hostname ? `${info.hostname}:25565` : 'Set CLOUDFLARE_TUNNEL_HOSTNAME'}
+            </code>
+          </div>
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            flexWrap: 'wrap',
+          }}>
+            <a
+              href={docsHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                color: '#57A64E',
+                textDecoration: 'none',
+                fontWeight: 600,
+                border: '1px solid rgba(87, 166, 78, 0.5)',
+                borderRadius: '999px',
+                padding: '6px 14px',
+                transition: 'all 0.2s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(87, 166, 78, 0.15)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              Cloudflare domain setup guide →
+            </a>
+          </div>
+          {info?.logs && info.logs.length > 0 && (
+            <div style={{
+              background: 'rgba(0, 0, 0, 0.3)',
+              border: '1px solid rgba(255,255,255,0.08)',
+              borderRadius: '8px',
+              padding: '10px',
+              fontFamily: '"JetBrains Mono", monospace',
+              fontSize: '0.75rem',
+              lineHeight: 1.5,
+              color: '#b5b5b5',
+              maxHeight: '160px',
+              overflow: 'auto',
+            }}>
+              {info.logs.join('\n')}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <>
       <style>{`
@@ -196,6 +325,7 @@ export function Plugins({ plugins, serverState, onPluginToggle }: Props) {
           }
         }
       `}</style>
+      {renderConnectionCard()}
       <div style={{
       background: 'rgba(26, 46, 30, 0.4)',
       backdropFilter: 'blur(10px)',
@@ -932,4 +1062,3 @@ export function Plugins({ plugins, serverState, onPluginToggle }: Props) {
     </>
   );
 }
-

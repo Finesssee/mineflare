@@ -134,11 +134,16 @@ const tsAuthkey = await Secret("ts-authkey", {
   value: alchemy.secret(process.env.TS_AUTHKEY || "null"),
 });
 
+const cloudflareTunnelToken = await Secret("cloudflare-tunnel-token", {
+  value: alchemy.secret(process.env.CLOUDFLARE_TUNNEL_TOKEN || "null"),
+});
+
 const bindings =  {
   MINECRAFT_CONTAINER: container,
-
+  
   // Secrets for Tailscale
   TS_AUTHKEY: tsAuthkey,
+  CLOUDFLARE_TUNNEL_TOKEN: cloudflareTunnelToken,
   NODE_ENV: process.env.NODE_ENV ?? 'development',
   // Reset auth to first-use setup mode (string boolean: "true" | "false")
   MINEFLARE_RESET_PASSWORD_MODE: process.env.MINEFLARE_RESET_PASSWORD_MODE ?? 'false',
@@ -155,6 +160,9 @@ const bindings =  {
   // Data bucket for server game data
   DATA_BUCKET_NAME: dataBucket.name,
   DATA_BUCKET: dataBucket,
+  
+  // Cloudflare Tunnel metadata
+  CLOUDFLARE_TUNNEL_HOSTNAME: process.env.CLOUDFLARE_TUNNEL_HOSTNAME ?? '',
   
   // Dynmap worker URL for iframe embedding
   DYNMAP_WORKER_URL: dynmapWorker.url ?? "",

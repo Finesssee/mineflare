@@ -52,6 +52,9 @@ sudo chmod 755 /status
 sudo mkdir -p /logs
 sudo chown 1000:1000 /logs
 sudo chmod 755 /logs
+sudo touch /logs/cloudflare-tunnel.log
+sudo chown 1000:1000 /logs/cloudflare-tunnel.log
+sudo chmod 644 /logs/cloudflare-tunnel.log
 
 # Helper function to write startup status
 write_status() {
@@ -201,6 +204,30 @@ start_tailscale() {
       echo "Warning: Tailscale connection failed, continuing anyway..."
     fi
   fi
+}
+
+start_cloudflare_tunnel() {
+
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    echo "cloudflared binary not found, skipping Cloudflare Tunnel"
+    return
+  fi
+
+  local token="${CLOUDFLARE_TUNNEL_TOKEN:-}"
+
+  if [ -z "$token" ] || [ "$token" = "null" ]; then
+    echo "Skipping Cloudflare Tunnel (no CLOUDFLARE_TUNNEL_TOKEN provided)"
+    return
+  fi
+
+  local log_file="/logs/cloudflare-tunnel.log"
+  : > "$log_file"
+  chmod 644 "$log_file" 2>/dev/null || true
+
+  echo "$(date -Iseconds) Starting Cloudflare Tunnel for hostname: ${CLOUDFLARE_TUNNEL_HOSTNAME:-unnamed}" >> "$log_file"
+
+  cloudflared --no-autoupdate tunnel run --token "$token" >> "$log_file" 2>&1 &
+  echo "Cloudflare Tunnel process started in background (logs: $log_file)"
 }
 
 configure_dynmap() {
@@ -909,6 +936,9 @@ start_http_proxy
 
 # Start Tailscale in background if it's enabled
 start_tailscale &
+
+# Start Cloudflare Tunnel in background if configured
+start_cloudflare_tunnel &
 
 # Setup hteetp binary
 write_status "Setting up hteetp"
