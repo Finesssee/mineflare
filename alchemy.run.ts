@@ -21,7 +21,8 @@ const app = await alchemy(name, {
   stage: name,
 });
 
-const baseDockerfile = await Bun.file("docker_src/.BASE_DOCKERFILE").text();
+import { readFile } from "fs/promises";
+const baseDockerfile = await readFile("docker_src/.BASE_DOCKERFILE", "utf-8");
 
 console.log(`Base Dockerfile: ${baseDockerfile}`);
 export const containerPromise = Container<MinecraftContainer>("container3", {
@@ -32,7 +33,7 @@ export const containerPromise = Container<MinecraftContainer>("container3", {
     context: 'container_src',
     dockerfile: "Dockerfile",
     args: {
-        BASE_DOCKERFILE: baseDockerfile
+      BASE_DOCKERFILE: baseDockerfile
     }
   },
   instanceType: "standard-4",
@@ -66,7 +67,7 @@ const dynmapBucketPromise: Promise<R2Bucket> = R2Bucket("dynmap-tiles", {
       id: "delete-after-7-days",
       enabled: true,
       conditions: {
-          prefix: "tiles/world/",
+        prefix: "tiles/world/",
       },
       deleteObjectsTransition: {
         condition: {
@@ -138,12 +139,18 @@ const cloudflareTunnelToken = await Secret("cloudflare-tunnel-token", {
   value: alchemy.secret(process.env.CLOUDFLARE_TUNNEL_TOKEN || "null"),
 });
 
-const bindings =  {
+const sshAuthorizedKeys = await Secret("ssh-authorized-keys", {
+  value: alchemy.secret(process.env.SSH_AUTHORIZED_KEYS || ""),
+});
+
+const bindings = {
   MINECRAFT_CONTAINER: container,
-  
+
   // Secrets for Tailscale
   TS_AUTHKEY: tsAuthkey,
   CLOUDFLARE_TUNNEL_TOKEN: cloudflareTunnelToken,
+  SSH_AUTHORIZED_KEYS: sshAuthorizedKeys,
+  ALLOW_SSH: process.env.ALLOW_SSH ?? 'false',
   NODE_ENV: process.env.NODE_ENV ?? 'development',
   // Reset auth to first-use setup mode (string boolean: "true" | "false")
   MINEFLARE_RESET_PASSWORD_MODE: process.env.MINEFLARE_RESET_PASSWORD_MODE ?? 'false',
@@ -160,10 +167,10 @@ const bindings =  {
   // Data bucket for server game data
   DATA_BUCKET_NAME: dataBucket.name,
   DATA_BUCKET: dataBucket,
-  
+
   // Cloudflare Tunnel metadata
   CLOUDFLARE_TUNNEL_HOSTNAME: process.env.CLOUDFLARE_TUNNEL_HOSTNAME ?? '',
-  
+
   // Dynmap worker URL for iframe embedding
   DYNMAP_WORKER_URL: dynmapWorker.url ?? "",
 } as const;
@@ -182,8 +189,8 @@ await worker;
 
 
 const agentDOPromise = DurableObjectNamespace("mineflare-agent", {
-    className: "MineflareAgent",
-    sqlite: true,
+  className: "MineflareAgent",
+  sqlite: true,
 });
 
 await agentDOPromise;
@@ -201,13 +208,13 @@ const agentWorkerPromise: Promise<import("alchemy/cloudflare").Worker> = Promise
 
 await agentWorkerPromise;
 
-const [ agentDO, agentWorker] = await Promise.all([agentDOPromise, agentWorkerPromise]);
+const [agentDO, agentWorker] = await Promise.all([agentDOPromise, agentWorkerPromise]);
 
 console.log("Dynmap Worker URL:", dynmapWorker.url);
 console.log("Agent Worker URL:", agentWorker.url);
 
 let devTunnelProcess: Promise<unknown> | undefined;
-if(process.env.NODE_ENV === "development" && process.env.DEV_TUNNEL_AGENT_HOSTNAME && process.env.DEV_TUNNEL_DYNMAP_HOSTNAME) {
+if (process.env.NODE_ENV === "development" && process.env.DEV_TUNNEL_AGENT_HOSTNAME && process.env.DEV_TUNNEL_DYNMAP_HOSTNAME) {
   console.log("Creating dev tunnel for agent and dynmap");
   const devTunnel = await Tunnel("mineflare-agent-dev-tunnel", {
     name: `${app.name}-agent-dev`,
@@ -240,6 +247,6 @@ console.log("Worker backend URL:", worker.apiUrl);
 
 await app.finalize();
 
-if(devTunnelProcess) {
+if (devTunnelProcess) {
   await devTunnelProcess;
 }
