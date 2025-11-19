@@ -184,6 +184,10 @@ ALCHEMY_PASSWORD=your_secure_password
 # Optional: Cloudflare Tunnel for public access
 CLOUDFLARE_TUNNEL_TOKEN=copy_from_cloudflare_zero_trust
 CLOUDFLARE_TUNNEL_HOSTNAME=mc.example.com
+
+# Optional: Cloudflare Access SSH (multi-line keys allowed)
+ALLOW_SSH=true
+SSH_AUTHORIZED_KEYS="ssh-ed25519 AAAA... user@example"
 ```
 
 ### Container Settings
@@ -208,6 +212,13 @@ Mineflare supports optional Minecraft plugins that can be enabled/disabled via t
 **Adding Custom Plugins:**
 
 Instructions coming soon....
+
+## 🛡️ Maintenance & Remote Access
+
+- **Cloudflare Access SSH** – Set `ALLOW_SSH=true` and provide your public keys via `SSH_AUTHORIZED_KEYS` (or upload `/data/ssh/authorized_keys`). Cloudflared automatically exposes `ssh://localhost:22` through the same tunnel token, so you can connect with `cloudflared access ssh --hostname ssh.example.com` without opening new ports. Access policies live in Zero Trust → Access → Applications.
+- **Maintenance Mode** – Use the new dashboard controls to enter maintenance mode (server must be stopped). This boots the container without Minecraft, enabling SSH/ttyd access plus the file server without risking world corruption. Exiting maintenance stops the container and clears the flag.
+- **Embedded Bash Terminal** – The dashboard now embeds the ttyd bash session, so you can run commands without leaving the browser. It shares state with SSH, meaning Cloudflare Access + web terminal both land in the same shell.
+- **File Manager** – Browse `/data`, upload/download mods, edit configs, and create folders directly from the UI. Operations are gated behind maintenance mode; when the server is running the controls are read-only to keep the world safe.
 
 ## 🛠️ Development Commands
 
