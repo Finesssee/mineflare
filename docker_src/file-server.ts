@@ -33,6 +33,8 @@
 import { spawn } from "bun";
 import { file, S3Client } from "bun";
 import path from "node:path";
+import type { Dirent } from "node:fs";
+import { readdir, stat, mkdir, rm } from "node:fs/promises";
 
 const PORT = 8083;
 
@@ -105,6 +107,21 @@ interface ModpackJobResult {
   filesInstalled: number;
   overridesApplied: boolean;
   metadata?: Record<string, unknown>;
+}
+
+interface ManagedFileEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'directory' | 'symlink';
+  size: number | null;
+  modified: number | null;
+}
+
+interface ManagedFileListing {
+  root: string;
+  path: string;
+  parent: string | null;
+  entries: ManagedFileEntry[];
 }
 
 interface ModpackJob {
@@ -510,6 +527,19 @@ class FileServer {
     error?: string;
   }> = new Map();
   private modpackJobs: Map<string, ModpackJob> = new Map();
+  private readonly managedRoots: string[];
+
+  constructor() {
+    this.managedRoots = (process.env.FILE_MANAGER_ROOTS || '/data')
+      .split(',')
+      .map(entry => entry.trim())
+      .filter(Boolean)
+      .map(root => root.startsWith('/') ? root : `/${root}`)
+      .map(root => root === '/' ? '/' : root.replace(/\/+$/, ''));
+    if (this.managedRoots.length === 0) {
+      this.managedRoots.push('/data');
+    }
+  }
 
   private jsonResponse(data: unknown, init?: { status?: number; headers?: Record<string, string> }): Response {
     const body = JSON.stringify(data);
@@ -530,6 +560,67 @@ class FileServer {
     if (!this.isMaintenanceModeEnabled()) {
       throw new Error('Maintenance mode must be enabled before installing a modpack. Stop the server and enter maintenance mode from the Mineflare dashboard.');
     }
+  }
+
+  private resolveManagedPath(rawPath: string | null | undefined, options?: { allowRootFallback?: boolean }): { absolute: string; root: string; parent: string | null } {
+    const allowFallback = options?.allowRootFallback !== false;
+    const candidate = rawPath && rawPath.trim().length ? rawPath.trim() : (allowFallback ? this.managedRoots[0] : null);
+    if (!candidate) {
+      throw new Error('Path is required');
+    }
+
+    const normalizedInput = candidate.startsWith('/') ? candidate : `/${candidate}`;
+    const absolutePath = path.posix.resolve('/', path.posix.normalize(normalizedInput));
+
+    for (const root of this.managedRoots) {
+      if (root === '/' || absolutePath === root || absolutePath.startsWith(`${root}/`)) {
+        return {
+          absolute: absolutePath,
+          root,
+          parent: this.computeParent(root, absolutePath)
+        };
+      }
+    }
+
+    throw new Error('Path is outside managed roots');
+  }
+
+  private computeParent(root: string, absolute: string): string | null {
+    if (absolute === root) {
+      return null;
+    }
+    const candidate = path.posix.dirname(absolute);
+    if (candidate.length < root.length) {
+      return root;
+    }
+    if (!candidate.startsWith(root)) {
+      return root;
+    }
+    return candidate;
+  }
+
+  private async describeEntry(entry: Dirent, basePath: string): Promise<ManagedFileEntry> {
+    const entryPath = path.posix.join(basePath, entry.name);
+    let statsInfo: Awaited<ReturnType<typeof stat>> | null = null;
+    try {
+      statsInfo = await stat(entryPath);
+    } catch {
+      // Ignore stat errors for broken symlinks, etc.
+    }
+
+    const type: ManagedFileEntry['type'] = entry.isDirectory()
+      ? 'directory'
+      : entry.isSymbolicLink()
+        ? 'symlink'
+        : 'file';
+
+    return {
+      name: entry.name,
+      path: entryPath,
+      type,
+      size: statsInfo && statsInfo.isFile() ? statsInfo.size : null,
+      modified: statsInfo ? statsInfo.mtimeMs : null,
+    };
   }
 
   private generateJobId(source: ModpackSource): string {
@@ -573,10 +664,129 @@ class FileServer {
     }, statusLogIntervalMs);
   }
 
+  private async handleListFiles(url: URL): Promise<Response> {
+    try {
+      const target = this.resolveManagedPath(url.searchParams.get('path'), { allowRootFallback: true });
+      const entries = await readdir(target.absolute, { withFileTypes: true });
+      const listing = await Promise.all(entries.map(entry => this.describeEntry(entry, target.absolute)));
+      listing.sort((a, b) => {
+        if (a.type === b.type) {
+          return a.name.localeCompare(b.name);
+        }
+        if (a.type === 'directory') return -1;
+        if (b.type === 'directory') return 1;
+        return a.name.localeCompare(b.name);
+      });
+      const payload: ManagedFileListing = {
+        root: target.root,
+        path: target.absolute,
+        parent: target.parent,
+        entries: listing,
+      };
+      return this.jsonResponse(payload, { headers: { 'Cache-Control': 'no-store' } });
+    } catch (error: any) {
+      const message = error?.message || 'Failed to list files';
+      const status = message.includes('outside') ? 403 : message.includes('required') ? 400 : 500;
+      return this.jsonResponse({ error: message }, { status });
+    }
+  }
+
+  private async handleReadFile(url: URL): Promise<Response> {
+    try {
+      const target = this.resolveManagedPath(url.searchParams.get('path'), { allowRootFallback: false });
+      try {
+        await stat(target.absolute);
+      } catch (err: any) {
+        if (err?.code === 'ENOENT') {
+          return new Response('File not found', { status: 404 });
+        }
+        throw err;
+      }
+      const fileHandle = Bun.file(target.absolute);
+      const buffer = await fileHandle.arrayBuffer();
+      return new Response(buffer, {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Cache-Control': 'no-store'
+        }
+      });
+    } catch (error: any) {
+      const message = error?.message || 'Failed to read file';
+      const status = message.includes('outside') ? 403 : message.includes('required') ? 400 : 500;
+      return this.jsonResponse({ error: message }, { status });
+    }
+  }
+
+  private async handleWriteFile(url: URL, req: Request): Promise<Response> {
+    try {
+      this.ensureMaintenanceModeEnabled();
+      const target = this.resolveManagedPath(url.searchParams.get('path'), { allowRootFallback: false });
+      const buffer = await req.arrayBuffer();
+      await mkdir(path.posix.dirname(target.absolute), { recursive: true });
+      await Bun.write(target.absolute, buffer);
+      return this.jsonResponse({ success: true, path: target.absolute });
+    } catch (error: any) {
+      const message = error?.message || 'Failed to write file';
+      const status = message.includes('maintenance') ? 400 : message.includes('outside') ? 403 : 500;
+      return this.jsonResponse({ error: message }, { status });
+    }
+  }
+
+  private async handleDeletePath(url: URL): Promise<Response> {
+    try {
+      this.ensureMaintenanceModeEnabled();
+      const target = this.resolveManagedPath(url.searchParams.get('path'), { allowRootFallback: false });
+      await rm(target.absolute, { recursive: true, force: true });
+      return this.jsonResponse({ success: true, path: target.absolute });
+    } catch (error: any) {
+      const message = error?.message || 'Failed to delete path';
+      const status = message.includes('maintenance') ? 400 : message.includes('outside') ? 403 : 500;
+      return this.jsonResponse({ error: message }, { status });
+    }
+  }
+
+  private async handleCreateDirectory(req: Request): Promise<Response> {
+    try {
+      this.ensureMaintenanceModeEnabled();
+      let body: { path?: string } | null = null;
+      try {
+        body = await req.json();
+      } catch {
+        // Ignore - validation below
+      }
+      const rawPath = body?.path;
+      if (!rawPath || !rawPath.trim()) {
+        return this.jsonResponse({ error: 'Directory path is required' }, { status: 400 });
+      }
+      const target = this.resolveManagedPath(rawPath, { allowRootFallback: false });
+      await mkdir(target.absolute, { recursive: true });
+      return this.jsonResponse({ success: true, path: target.absolute });
+    } catch (error: any) {
+      const message = error?.message || 'Failed to create directory';
+      const status = message.includes('maintenance') ? 400 : message.includes('outside') ? 403 : 500;
+      return this.jsonResponse({ error: message }, { status });
+    }
+  }
+
   private async handleRequest(req: Request): Promise<Response> {
     this.requestCount++;
     
     const url = new URL(req.url);
+    if (url.pathname === '/fs/list' && req.method === 'GET') {
+      return this.handleListFiles(url);
+    }
+    if (url.pathname === '/fs/file' && req.method === 'GET') {
+      return this.handleReadFile(url);
+    }
+    if (url.pathname === '/fs/file' && req.method === 'PUT') {
+      return this.handleWriteFile(url, req);
+    }
+    if (url.pathname === '/fs/file' && req.method === 'DELETE') {
+      return this.handleDeletePath(url);
+    }
+    if (url.pathname === '/fs/directory' && req.method === 'POST') {
+      return this.handleCreateDirectory(req);
+    }
     if (req.method === 'GET' && url.pathname.startsWith('/modpack/status/')) {
       const id = url.pathname.replace('/modpack/status/', '').trim();
       if (!id) {
@@ -1312,38 +1522,48 @@ class FileServer {
     if (!filePath.startsWith("/")) {
       filePath = "/" + filePath;
     }
-    if(filePath.startsWith("//")) {
+    if (filePath.startsWith("//")) {
       filePath = filePath.substring(1);
+    }
+
+    if (filePath.length > 1 && filePath.endsWith("/")) {
+      filePath = filePath.replace(/\/+$/, "");
     }
 
     try {
       console.log(`[FileServer] Checking if file exists: ${filePath}`);
-      // Check if file exists
-      // this returns false for directories!
-      const fileHandle = Bun.file(filePath);
-      const exists = await fileHandle.exists();
 
-      if (!exists) {
-        return new Response("File not found", { status: 404 });
-      }
+      const stats = await stat(filePath);
 
-      // Bun's stat doesn't have isDirectory, so we try to read it
-      // If it fails with a specific error, it's likely a directory
-      try {
-        const content = await fileHandle.arrayBuffer();
-        
-        return new Response(content, {
+      if (stats.isDirectory()) {
+        const entries = await readdir(filePath, { withFileTypes: true });
+        const listing = entries
+          .map(entry => {
+            const type = entry.isDirectory() ? "d" : entry.isSymbolicLink() ? "l" : "-";
+            return `${type} ${entry.name}`;
+          })
+          .join("\n");
+
+        const body = [`Directory listing for ${filePath}:`, listing || "<empty>"]
+          .filter(Boolean)
+          .join("\n");
+
+        return new Response(body, {
           headers: {
-            "Content-Type": "application/octet-stream",
-            "Content-Length": content.byteLength.toString(),
+            "Content-Type": "text/plain; charset=utf-8",
           },
         });
-      } catch (e: any) {
-        if (e.message?.includes("EISDIR") || e.code === "EISDIR") {
-          return new Response("Path is a directory", { status: 404 });
-        }
-        throw e;
       }
+
+      const fileHandle = Bun.file(filePath);
+      const content = await fileHandle.arrayBuffer();
+
+      return new Response(content, {
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Content-Length": content.byteLength.toString(),
+        },
+      });
     } catch (error: any) {
       if (error.code === "ENOENT") {
         return new Response("File not found", { status: 404 });
