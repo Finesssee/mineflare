@@ -86,3 +86,19 @@ export interface VersionResponse {
   canChange: boolean;
   error?: string;
 }
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'directory' | 'symlink';
+  size: number | null;
+  modified: number | null;
+}
+
+export interface FileListResponse {
+  root: string;
+  path: string;
+  parent: string | null;
+  entries: FileEntry[];
+  error?: string;
+}
