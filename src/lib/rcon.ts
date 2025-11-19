@@ -58,7 +58,7 @@ class Rcon {
   private defaultTimeout: number;
   private _isConnected: boolean;
 
-  constructor(tcpPort: CloudflareTcpPort, password: string, private stateProvider: () => Promise<'running' | 'stopping' | 'stopped' | 'starting'>, options?: RconOptions) {
+  constructor(tcpPort: CloudflareTcpPort, password: string, private stateProvider: () => Promise<'running' | 'stopping' | 'stopped' | 'starting' | 'maintenance'>, options?: RconOptions) {
     options = options || {};
 
     this.tcpPort = tcpPort;
