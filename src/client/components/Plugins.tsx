@@ -1,6 +1,8 @@
 import { useState } from 'preact/hooks';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Plugin, ConnectionInfo, ServerState } from '../types/api';
-import { fetchApi } from '../utils/api';
+import { fetchWithAuth } from '../utils/api';
+import { DYNMAP_PLUGIN_FILENAME } from '../../shared/constants';
 
 interface Props {
   plugins: Plugin[];
@@ -10,13 +12,14 @@ interface Props {
 }
 
 const PLUGIN_INFO: Record<string, { emoji: string; description: string }> = {
-  'Dynmap-3.7-beta-11-spigot': {
+  [DYNMAP_PLUGIN_FILENAME]: {
     emoji: '🗺️',
     description: 'DynMap powers the minimap feature and shows a live map of your world. Learn more at dynmap.wiki.gg'
   }
 };
 
 export function Plugins({ plugins, serverState, onPluginToggle, connectionInfo }: Props) {
+  const queryClient = useQueryClient();
   const [hoveredInfo, setHoveredInfo] = useState<string | null>(null);
   const [hoveredWarning, setHoveredWarning] = useState<string | null>(null);
   const [hoveredToggle, setHoveredToggle] = useState<string | null>(null);
@@ -25,8 +28,43 @@ export function Plugins({ plugins, serverState, onPluginToggle, connectionInfo }
   const [envModalPlugin, setEnvModalPlugin] = useState<Plugin | null>(null);
   const [envModalMode, setEnvModalMode] = useState<'edit' | 'enable'>('edit');
   const [envFormData, setEnvFormData] = useState<Record<string, string>>({});
-  const [envSaving, setEnvSaving] = useState(false);
   const [statusModalPlugin, setStatusModalPlugin] = useState<Plugin | null>(null);
+
+  const closeEnvModal = () => {
+    setEnvModalPlugin(null);
+    setEnvFormData({});
+  };
+
+  const saveEnvMutation = useMutation({
+    mutationFn: async ({ plugin, env, alsoEnable }: { plugin: Plugin; env: Record<string, string>; alsoEnable: boolean }) => {
+      const body: Record<string, unknown> = { env };
+      if (alsoEnable) {
+        body.enabled = true;
+      }
+
+      const response = await fetchWithAuth(`/api/plugins/${plugin.filename}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const result = await response.json() as { success: boolean; plugins?: Plugin[]; error?: string };
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to update plugin environment variables');
+      }
+    },
+    onSuccess: () => {
+      closeEnvModal();
+      queryClient.invalidateQueries({ queryKey: ['server-data'] });
+    },
+    onError: (error) => {
+      console.error('Failed to save env vars:', error);
+      alert(error instanceof Error ? error.message : 'Failed to save environment variables');
+    },
+  });
+
+  const envSaving = saveEnvMutation.isPending;
 
   const openEnvModal = (plugin: Plugin, mode: 'edit' | 'enable') => {
     setEnvModalPlugin(plugin);
@@ -39,42 +77,9 @@ export function Plugins({ plugins, serverState, onPluginToggle, connectionInfo }
     setEnvFormData(initialData);
   };
 
-  const closeEnvModal = () => {
-    setEnvModalPlugin(null);
-    setEnvFormData({});
-    setEnvSaving(false);
-  };
-
-  const saveEnvVars = async (alsoEnable: boolean = false) => {
+  const saveEnvVars = (alsoEnable: boolean = false) => {
     if (!envModalPlugin) return;
-    
-    try {
-      setEnvSaving(true);
-      const body: any = { env: envFormData };
-      if (alsoEnable) {
-        body.enabled = true;
-      }
-      
-      const response = await fetchApi(`/api/plugins/${envModalPlugin.filename}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      
-      const result = await response.json() as { success: boolean; plugins?: Plugin[]; error?: string };
-      
-      if (result.success) {
-        closeEnvModal();
-        // Parent will update plugins state via polling
-      } else {
-        alert(result.error || 'Failed to update plugin environment variables');
-      }
-    } catch (error) {
-      console.error('Failed to save env vars:', error);
-      alert('Failed to save environment variables');
-    } finally {
-      setEnvSaving(false);
-    }
+    saveEnvMutation.mutate({ plugin: envModalPlugin, env: envFormData, alsoEnable });
   };
 
   const handleToggle = async (filename: string, currentState: string) => {
@@ -402,7 +407,7 @@ export function Plugins({ plugins, serverState, onPluginToggle, connectionInfo }
           const enabled = isPluginEnabled(plugin.state);
           const transitional = isTransitionalState(plugin.state);
           const warningTooltip = getWarningTooltip(plugin.state);
-          const isDynmap = plugin.filename === 'Dynmap-3.7-beta-11-spigot';
+          const isDynmap = plugin.filename === DYNMAP_PLUGIN_FILENAME;
           const isTogglingThis = toggling === plugin.filename;
           const statusIcon = getStatusIcon(plugin.status);
 

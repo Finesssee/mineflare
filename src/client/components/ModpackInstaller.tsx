@@ -1,7 +1,8 @@
-import { useEffect, useState, useRef } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import type { JSX } from 'preact';
 import type { ServerState } from '../types/api';
-import { fetchApi } from '../utils/api';
+import { fetchWithAuth } from '../utils/api';
 
 type ModpackSource = 'modrinth' | 'curseforge';
 
@@ -37,109 +38,159 @@ interface ModpackInstallerProps {
 }
 
 const STORAGE_KEY = 'mineflare-modpack-job';
+type InstallPayload = {
+  source: ModpackSource;
+  url?: string;
+  packVersion?: string;
+  projectId?: number;
+  fileId?: number;
+};
+
+class ModpackJobNotFoundError extends Error {}
+
+const MODPACK_JOB_QUERY_KEY = ['modpack-job'] as const;
+
+const getInitialJobId = () => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  try {
+    return window.localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
+};
+
+const isTerminalStatus = (status: ModpackJob['status']) => status === 'completed' || status === 'failed';
+
+async function fetchModpackJob(jobId: string): Promise<ModpackJob> {
+  const response = await fetchWithAuth(`/api/modpack/status/${jobId}`);
+  if (response.status === 404) {
+    throw new ModpackJobNotFoundError('Modpack job not found');
+  }
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json() as Promise<ModpackJob>;
+}
+
+async function triggerModpackInstall(payload: InstallPayload): Promise<string> {
+  const response = await fetchWithAuth('/api/modpack/install', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  const result = await response.json() as { success: boolean; jobId?: string; error?: string };
+  if (!result.success || !result.jobId) {
+    throw new Error(result.error || 'Failed to start modpack installation');
+  }
+  return result.jobId;
+}
 
 export function ModpackInstaller({ serverState }: ModpackInstallerProps) {
   const [modrinthUrl, setModrinthUrl] = useState('');
   const [modrinthVersion, setModrinthVersion] = useState('');
   const [curseProjectId, setCurseProjectId] = useState('');
   const [curseFileId, setCurseFileId] = useState('');
-  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
-  const [job, setJob] = useState<ModpackJob | null>(null);
-  const [installing, setInstalling] = useState<ModpackSource | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const pollTimeout = useRef<number | null>(null);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(getInitialJobId);
+  const [installingSource, setInstallingSource] = useState<ModpackSource | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const clearPoll = () => {
-    if (pollTimeout.current) {
-      clearTimeout(pollTimeout.current);
-      pollTimeout.current = null;
-    }
-  };
+  const queryKey = currentJobId ? [...MODPACK_JOB_QUERY_KEY, currentJobId] : MODPACK_JOB_QUERY_KEY;
 
-  const schedulePoll = (jobId: string) => {
-    clearPoll();
-    pollTimeout.current = window.setTimeout(() => pollStatus(jobId), 3500);
-  };
-
-  const updateJobState = (jobId: string, data: ModpackJob) => {
-    setCurrentJobId(jobId);
-    setJob(data);
-    if (data.status === 'completed' || data.status === 'failed') {
-      clearPoll();
-      localStorage.removeItem(STORAGE_KEY);
-      setInstalling(null);
-      if (serverState === 'maintenance') {
-        // Container will exit maintenance automatically once install completes
+  const jobStatusQuery = useQuery<ModpackJob>({
+    queryKey,
+    queryFn: () => fetchModpackJob(currentJobId!),
+    enabled: Boolean(currentJobId),
+    refetchOnWindowFocus: false,
+    refetchInterval: (query) => {
+      const snapshot = query.state.data as ModpackJob | undefined;
+      if ((snapshot && !isTerminalStatus(snapshot.status)) || (currentJobId && !snapshot)) {
+        return 3500;
       }
-    } else {
-      schedulePoll(jobId);
-    }
-  };
+      return false;
+    },
+    retry: (failureCount, error) => {
+      if (error instanceof ModpackJobNotFoundError) {
+        return false;
+      }
+      return failureCount < 3;
+    },
+  });
 
-  const pollStatus = async (jobId: string) => {
-    try {
-      const response = await fetchApi(`/api/modpack/status/${jobId}`);
-      if (response.status === 404) {
-        clearPoll();
-        localStorage.removeItem(STORAGE_KEY);
-        setInstalling(null);
+  const job = jobStatusQuery.data ?? null;
+
+  useEffect(() => {
+    if (jobStatusQuery.error instanceof ModpackJobNotFoundError) {
+      // Only clear local job if server is stable (running or stopped)
+      // During maintenance/starting, 404s are expected due to container restarts
+      if (serverState === 'running' || serverState === 'stopped') {
+        console.debug('[ModpackInstaller] Clearing job due to 404 in stable state:', serverState);
         setCurrentJobId(null);
-        setJob(null);
-        return;
+        setInstallingSource(null);
+      } else {
+        console.debug('[ModpackInstaller] Suppressing 404-clear during transitional state:', serverState);
       }
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-      const data = await response.json() as ModpackJob;
-      updateJobState(jobId, data);
-    } catch (err) {
-      console.error('Failed to poll modpack status:', err);
-      setError(err instanceof Error ? err.message : 'Failed to fetch modpack status');
-      clearPoll();
     }
-  };
+  }, [jobStatusQuery.error, serverState]);
 
-  const beginTracking = (jobId: string) => {
-    setCurrentJobId(jobId);
-    localStorage.setItem(STORAGE_KEY, jobId);
-    setJob(null);
-    pollStatus(jobId);
-  };
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (currentJobId && (!job || !isTerminalStatus(job.status))) {
+      window.localStorage.setItem(STORAGE_KEY, currentJobId);
+    } else {
+      window.localStorage.removeItem(STORAGE_KEY);
+    }
+  }, [currentJobId, job]);
 
-  const startInstall = async (payload: { source: ModpackSource; url?: string; packVersion?: string; projectId?: number; fileId?: number }) => {
+  useEffect(() => {
+    if (job && isTerminalStatus(job.status)) {
+      setInstallingSource(null);
+    }
+  }, [job]);
+
+  const startInstallMutation = useMutation({
+    mutationFn: triggerModpackInstall,
+    onMutate: (variables: InstallPayload) => {
+      setInstallingSource(variables.source);
+      setFormError(null);
+    },
+    onSuccess: (jobId: string) => {
+      setCurrentJobId(jobId);
+    },
+    onError: (error) => {
+      console.error('Failed to start modpack install:', error);
+      setInstallingSource(null);
+      setFormError(error instanceof Error ? error.message : 'Failed to start modpack installation');
+    },
+  });
+
+  const jobActive = Boolean(job && !isTerminalStatus(job.status));
+  const jobLoading = Boolean(currentJobId && !job);
+  const disableInputs = startInstallMutation.isPending || jobLoading || jobActive || serverState !== 'stopped';
+
+  const statusError = jobStatusQuery.error && !(jobStatusQuery.error instanceof ModpackJobNotFoundError)
+    ? (jobStatusQuery.error instanceof Error ? jobStatusQuery.error.message : 'Failed to fetch modpack status')
+    : null;
+  const error = formError || statusError;
+
+  const startInstall = (payload: InstallPayload) => {
     if (serverState !== 'stopped') {
-      setError('Stop the server before installing a modpack.');
+      setFormError('Stop the server before installing a modpack.');
       return;
     }
-    setError(null);
-    setInstalling(payload.source);
-    try {
-      const response = await fetchApi('/api/modpack/install', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-      const result = await response.json() as { success: boolean; jobId?: string; error?: string };
-      if (!result.success || !result.jobId) {
-        throw new Error(result.error || 'Failed to start modpack installation');
-      }
-      beginTracking(result.jobId);
-    } catch (err) {
-      console.error('Failed to start modpack install:', err);
-      setError(err instanceof Error ? err.message : 'Failed to start modpack installation');
-      setInstalling(null);
-    }
+    startInstallMutation.mutate(payload);
   };
 
   const handleModrinthInstall = () => {
     const url = modrinthUrl.trim();
     if (!url) {
-      setError('Enter a Modrinth pack URL');
+      setFormError('Enter a Modrinth pack URL');
       return;
     }
     startInstall({ source: 'modrinth', url, packVersion: modrinthVersion.trim() || undefined });
@@ -149,23 +200,11 @@ export function ModpackInstaller({ serverState }: ModpackInstallerProps) {
     const projectId = Number(curseProjectId);
     const fileId = Number(curseFileId);
     if (!projectId || !fileId) {
-      setError('Enter both CurseForge project ID and file ID');
+      setFormError('Enter both CurseForge project ID and file ID');
       return;
     }
     startInstall({ source: 'curseforge', projectId, fileId });
   };
-
-  useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      setCurrentJobId(stored);
-      pollStatus(stored);
-    }
-    return () => clearPoll();
-  }, []);
-
-  const jobActive = Boolean(currentJobId && job && job.status !== 'completed' && job.status !== 'failed');
-  const disableInputs = installing !== null || jobActive || serverState !== 'stopped';
 
   const renderJobStatus = () => {
     if (!job || !currentJobId) return null;
@@ -382,9 +421,9 @@ export function ModpackInstaller({ serverState }: ModpackInstallerProps) {
           <button
             onClick={handleModrinthInstall}
             disabled={disableInputs}
-            style={buttonStyle(disableInputs || installing === 'curseforge')}
+            style={buttonStyle(disableInputs || installingSource === 'curseforge')}
           >
-            {installing === 'modrinth' ? 'Starting…' : 'Install from Modrinth'}
+            {installingSource === 'modrinth' ? 'Starting…' : 'Install from Modrinth'}
           </button>
         </div>
 
@@ -416,9 +455,9 @@ export function ModpackInstaller({ serverState }: ModpackInstallerProps) {
           <button
             onClick={handleCurseforgeInstall}
             disabled={disableInputs}
-            style={buttonStyle(disableInputs || installing === 'modrinth')}
+            style={buttonStyle(disableInputs || installingSource === 'modrinth')}
           >
-            {installing === 'curseforge' ? 'Starting…' : 'Install from CurseForge'}
+            {installingSource === 'curseforge' ? 'Starting…' : 'Install from CurseForge'}
           </button>
         </div>
       </div>
