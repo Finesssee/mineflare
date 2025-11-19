@@ -230,6 +230,48 @@ start_cloudflare_tunnel() {
   echo "Cloudflare Tunnel process started in background (logs: $log_file)"
 }
 
+start_ssh_server() {
+  if [ "${ALLOW_SSH:-false}" != "true" ]; then
+    echo "Skipping SSH server (ALLOW_SSH is not true)"
+    return
+  fi
+
+  if ! command -v sshd >/dev/null 2>&1; then
+    echo "OpenSSH server not installed, skipping"
+    return
+  fi
+
+  local key_material=""
+  if [ -n "${SSH_AUTHORIZED_KEYS:-}" ] && [ "${SSH_AUTHORIZED_KEYS}" != "null" ]; then
+    key_material=$(printf '%b' "${SSH_AUTHORIZED_KEYS}")
+  elif [ -f /data/ssh/authorized_keys ]; then
+    key_material=$(cat /data/ssh/authorized_keys)
+  fi
+
+  if [ -z "$key_material" ]; then
+    echo "Skipping SSH server (no authorized keys provided)"
+    return
+  fi
+
+  echo "Configuring OpenSSH server for minecraft user"
+
+  sudo mkdir -p /home/minecraft/.ssh /var/run/sshd /logs
+  local authorized_file="/home/minecraft/.ssh/authorized_keys"
+  printf '%s\n' "$key_material" | sudo tee "$authorized_file" >/dev/null
+  sudo chmod 700 /home/minecraft/.ssh
+  sudo chmod 600 "$authorized_file"
+  sudo chown -R minecraft:minecraft /home/minecraft/.ssh
+
+  sudo ssh-keygen -A >/dev/null 2>&1 || true
+
+  local log_file="/logs/sshd.log"
+  : > "$log_file"
+  sudo chmod 640 "$log_file" || true
+
+  echo "Starting sshd (logs: $log_file)"
+  sudo /usr/sbin/sshd -D >> "$log_file" 2>&1 &
+}
+
 configure_dynmap() {
   if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${DYNMAP_BUCKET:-}" ]; then
     echo "Skipping Dynmap S3 configuration (no R2 credentials found)"
@@ -944,6 +986,10 @@ start_tailscale &
 
 # Start Cloudflare Tunnel in background if configured
 start_cloudflare_tunnel &
+
+# Optionally expose SSH via Cloudflare Access/Tunnel
+write_status "Configuring SSH access"
+start_ssh_server
 
 # Setup hteetp binary
 write_status "Setting up hteetp"

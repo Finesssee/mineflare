@@ -37,6 +37,7 @@ RUN apt-get update \
         x11-utils \
         xdotool \
         ripgrep \
+        openssh-server \
     && curl -fsSL https://tailscale.com/install.sh | sh \
     && curl -fsSL https://bun.sh/install | bash \
     && mkdir -p $(dirname "${TAILSCALE_STATE_DIR}") \
@@ -157,7 +158,7 @@ RUN mkdir -p /run/tailscale \
 # 6080 - websockify (VNC-to-WebSocket proxy)
 # 6090 - Browser control API (xdotool navigation)
 #
-EXPOSE 5900 6080 6090
+EXPOSE 22 25565 25575 5900 6080 6090 7681 7682 7683 7684 8082 8083 8084 8085 8086 8087 8088 8089 8090 8091 8092 8093 8094 8095 8096 8097 8098 8099 8100
 
 ENTRYPOINT ["/usr/local/bin/start-with-services.sh"]
 CMD ["/image/scripts/start"]
