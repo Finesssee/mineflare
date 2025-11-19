@@ -1,5 +1,35 @@
 import { getBackendUrl } from "alchemy/cloudflare/bun-spa";
-const apiBaseUrl = getBackendUrl();
+
+function resolveBackendBaseUrl(): URL {
+  const metaEnv = typeof import.meta !== 'undefined'
+    ? ((import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? undefined)
+    : undefined;
+
+  const explicitUrl = metaEnv?.VITE_BACKEND_URL
+    ?? metaEnv?.BUN_PUBLIC_BACKEND_URL;
+
+  if (explicitUrl) {
+    return new URL(explicitUrl);
+  }
+
+  try {
+    return getBackendUrl();
+  } catch {
+    const fallbackOrigin = (() => {
+      if (typeof window === 'undefined') {
+        return 'http://127.0.0.1:8787/';
+      }
+      const { protocol, hostname, port } = window.location;
+      if (port === '5173' || port === '4173') {
+        return `${protocol}//${hostname}:8787/`;
+      }
+      return `${protocol}//${hostname}${port ? `:${port}` : ''}/`;
+    })();
+    return new URL(fallbackOrigin);
+  }
+}
+
+const apiBaseUrl = resolveBackendBaseUrl();
 console.log("apiBaseUrl", apiBaseUrl);
 
 export function apiHost() {
