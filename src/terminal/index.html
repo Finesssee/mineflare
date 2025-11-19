@@ -21,6 +21,18 @@
             overflow: hidden;
         }
 
+        body.embedded-terminal #header,
+        body.embedded-terminal #tabs,
+        body.embedded-terminal #url-panel,
+        body.embedded-terminal #connection-status {
+            display: none !important;
+        }
+
+        body.embedded-terminal #terminal-container {
+            top: 0;
+            padding: 10px;
+        }
+
         #header {
             position: fixed;
             top: 0;

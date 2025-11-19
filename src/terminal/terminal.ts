@@ -76,6 +76,20 @@ const terminalConfig = {
 };
 
 // Create terminal instances (browser is handled separately as an iframe)
+const urlParams = new URLSearchParams(window.location.search);
+const embeddedMode = urlParams.get('embedded') === 'true';
+const allowedDefaultTerminals: ActualTerminalType[] = ['claude', 'codex', 'gemini', 'bash'];
+const requestedDefault = urlParams.get('default') as ActualTerminalType | null;
+const fallbackTerminal: ActualTerminalType = embeddedMode ? 'bash' : 'claude';
+const defaultTerminal: ActualTerminalType = requestedDefault && allowedDefaultTerminals.includes(requestedDefault)
+  ? requestedDefault
+  : fallbackTerminal;
+
+if (embeddedMode) {
+  document.documentElement.classList.add('embedded-terminal');
+  document.body.classList.add('embedded-terminal');
+}
+
 const terminals: Record<ActualTerminalType, TerminalInstance> = {
   claude: createTerminalInstance('claude'),
   codex: createTerminalInstance('codex'),
@@ -87,7 +101,7 @@ const statusEl = document.getElementById('connection-status')!;
 const maxReconnectAttempts = 10;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
-let currentTerminal: TerminalType = 'claude';
+let currentTerminal: TerminalType = defaultTerminal;
 
 // URL detection
 interface DetectedUrl {
@@ -864,9 +878,6 @@ document.addEventListener('paste', (event) => {
   instance.ws.send(message);
 });
 
-// Setup data handler for Claude (initially visible)
-setupTerminalDataHandler('claude');
-
 // xterm.js handles paste events natively through its onData handler
 // No custom paste handling needed - CMD+V/Ctrl+V work out of the box
 
@@ -912,9 +923,9 @@ function switchTerminal(type: TerminalType) {
 }
 
 function doSwitchTerminal(type: TerminalType) {
-  if (type === currentTerminal) return;
+  const previous = currentTerminal;
+  currentTerminal = type;
   
-  // Update active tab
   tabs.forEach(tab => {
     if (tab.getAttribute('data-terminal') === type) {
       tab.classList.add('active');
@@ -923,7 +934,6 @@ function doSwitchTerminal(type: TerminalType) {
     }
   });
   
-  // Update active terminal wrapper
   terminalWrappers.forEach(wrapper => {
     if (wrapper.getAttribute('data-terminal') === type) {
       wrapper.classList.add('active');
@@ -931,36 +941,24 @@ function doSwitchTerminal(type: TerminalType) {
       wrapper.classList.remove('active');
     }
   });
-  
-  currentTerminal = type;
 
-  // Update URL panel to show URLs from new terminal
   updateUrlPanel();
 
-  // Browser tab doesn't need terminal setup
   if (type === 'browser') {
     updateTabConnectionState(type, 'connected');
     showStatus('Browser ready', 'connected');
     return;
   }
 
-  // Scan the terminal buffer for URLs when switching
-  scanTerminalForUrls(type);
+  const terminalKey = type as ActualTerminalType;
+  scanTerminalForUrls(terminalKey);
+  setupTerminalDataHandler(terminalKey);
+  terminals[terminalKey].terminal.focus();
 
-  // Setup data handler for this terminal if not already done
-  setupTerminalDataHandler(type);
-
-  // Focus the new terminal
-  terminals[type].terminal.focus();
-
-  // In shared PTY mode, terminal dimensions are controlled by server
-  // No need to fit or send resize commands
-
-  // SINGLETON PATTERN: Check existing connection state before creating new one
-  const instance = terminals[type];
+  const instance = terminals[terminalKey];
   if (!instance.ws || instance.ws.readyState === WebSocket.CLOSED || instance.ws.readyState === WebSocket.CLOSING) {
     console.log(`🔌 ${type}: No active connection, initiating new connection...`);
-    connect(type);
+    connect(terminalKey);
   } else if (instance.ws.readyState === WebSocket.OPEN) {
     console.log(`♻️ ${type}: REUSING existing connected WebSocket - singleton pattern working!`);
     updateTabConnectionState(type, 'connected');
@@ -972,11 +970,8 @@ function doSwitchTerminal(type: TerminalType) {
   }
 }
 
-// Focus initial terminal
-terminals.claude.terminal.focus();
-
-// Start connection to the current (claude) terminal
-connect('claude');
+// Initialize current terminal state
+switchTerminal(currentTerminal);
 
 // Mark browser tab as always connected (it's an iframe, not a WebSocket connection managed here)
 updateTabConnectionState('browser', 'connected');
