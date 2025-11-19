@@ -10,6 +10,7 @@ import { useAuth } from './hooks/useAuth';
 import { SessionTimer } from './components/SessionTimer';
 import { VersionSelector } from './components/VersionSelector';
 import { ModpackInstaller } from './components/ModpackInstaller';
+import { MaintenanceTools } from './components/MaintenanceTools';
 import logo from '../../dist/client/mineflare-logo.png';
 
 try {
@@ -552,6 +553,8 @@ export function App() {
 
         {/* Terminal (full width) */}
         <Terminal serverState={serverState} />
+
+        <MaintenanceTools serverState={serverState} onRefresh={refresh} />
       </div>
 
       {/* Floating Minimap */}

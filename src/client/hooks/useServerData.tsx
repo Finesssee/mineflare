@@ -1,327 +1,226 @@
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import type { ServerStatus, PlayerResponse, ServerInfo, Plugin, VersionResponse, SupportedVersion, ConnectionInfo, ServerState } from '../types/api';
+import { useState, useMemo, useCallback } from 'preact/hooks';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type {
+  ServerInfo,
+  ServerState,
+  ServerStatus,
+  PlayerResponse,
+  Plugin,
+  VersionResponse,
+  SupportedVersion,
+  ConnectionInfo,
+} from '../types/api';
 import { fetchWithAuth } from '../utils/api';
 
-export function useServerData(isAuthenticated: boolean) {
-  const [status, setStatus] = useState<ServerStatus | null>(null);
-  const [players, setPlayers] = useState<string[]>([]);
-  const [info, setInfo] = useState<ServerInfo | null>(null);
-  const [plugins, setPlugins] = useState<Plugin[]>([]);
-  const [connectionInfo, setConnectionInfo] = useState<ConnectionInfo | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [serverState, setServerState] = useState<ServerState>('stopped');
-  const [startupStep, setStartupStep] = useState<string | null>(null);
-  const [serverVersion, setServerVersion] = useState<string>('paper-1-21-8');
-  const [supportedVersions, setSupportedVersions] = useState<SupportedVersion[]>([]);
-  const [canChangeVersion, setCanChangeVersion] = useState(false);
-  
-  // Track active fetch calls for concurrency safety
-  const activeFetches = useRef<Set<Promise<any>>>(new Set());
-  const shouldFetchFullData = useRef(false);
+type ServerSnapshot = {
+  status: ServerStatus | null;
+  players: string[];
+  info: ServerInfo | null;
+  plugins: Plugin[];
+  connectionInfo: ConnectionInfo | null;
+  serverState: ServerState;
+  startupStep: string | null;
+  serverVersion: string;
+  supportedVersions: SupportedVersion[];
+  canChangeVersion: boolean;
+};
 
-  // Unified polling function that handles all states
-  const poll = useCallback(async () => {
-    const fetchPromise = (async () => {
-      try {
-        // First, check the container state (doesn't wake container)
-        const stateResponse = await fetchWithAuth(`/api/getState`);
-        const stateData = await stateResponse.json() as { status: string; lastChange: number };
-        const containerRunning = stateData.status === 'running' || stateData.status === 'healthy';
-        const containerStopping = stateData.status === 'stopping';
-        const containerStopped = stateData.status === 'stopped' || stateData.status === 'stopped_with_code';
-        
-        // If we're stopping, hold UI in 'stopping' until container is actually stopped
-        if (serverState === 'stopping') {
-          if (containerStopped || (!containerRunning && !containerStopping)) {
-            setServerState('stopped');
-            setStatus({ online: false, playerCount: 0, maxPlayers: 0 });
-            setPlayers([]);
-            shouldFetchFullData.current = false;
-          }
-          return;
-        }
+const SERVER_DATA_QUERY_KEY = ['server-data'] as const;
 
-        if (shouldFetchFullData.current) {
-          // We want to fetch full data (user started server or it's running)
-          if (containerRunning) {
-            // Container is running, fetch full server data
-            setLoading(true);
-            setError(null);
-            
-            const statusResponse = await fetchWithAuth(`/api/status`);
-            const statusData: ServerStatus = await statusResponse.json();
-            setStatus(statusData);
-            
-            if (statusData.online) {
-              setServerState('running');
-            }
+async function fetchJson<T>(path: string, init?: Parameters<typeof fetchWithAuth>[1]): Promise<T> {
+  const response = await fetchWithAuth(path, init);
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(text || `Request to ${path} failed`);
+  }
+  return response.json() as Promise<T>;
+}
 
-            const playersResponse = await fetchWithAuth(`/api/players`);
-            const playersData: PlayerResponse = await playersResponse.json();
-            setPlayers(playersData.players || []);
+const normalizeState = (status: string): ServerState => {
+  switch (status) {
+    case 'running':
+    case 'healthy':
+      return 'running';
+    case 'stopping':
+      return 'stopping';
+    case 'starting':
+      return 'starting';
+    case 'maintenance':
+      return 'maintenance';
+    default:
+      return 'stopped';
+  }
+};
 
-            const infoResponse = await fetchWithAuth(`/api/info`);
-            const infoData: ServerInfo = await infoResponse.json();
-            setInfo(infoData);
+async function fetchServerSnapshot(): Promise<ServerSnapshot> {
+  const { status: rawStatus } = await fetchJson<{ status: string; lastChange: number }>('/api/getState');
+  const serverState = normalizeState(rawStatus);
 
-            // Also fetch plugins to keep state in sync
-            await fetchPlugins();
-          } else if (serverState === 'starting' && !containerStopping) {
-            // We're trying to start - call /api/status to wake the container
-            setLoading(true);
-            setError(null);
-            
-            // Fetch startup status to get the current step
-            try {
-              const startupStatusResponse = await fetchWithAuth(`/api/startup-status`);
-              const startupStatusData = await startupStatusResponse.json() as { status: string; startupStep: string | null };
-              if (startupStatusData.startupStep) {
-                setStartupStep(startupStatusData.startupStep);
-              }
-            } catch (err) {
-              console.log('Failed to fetch startup step:', err);
-            }
-            
-            const statusResponse = await fetchWithAuth(`/api/status`);
-            const statusData: ServerStatus = await statusResponse.json();
-            setStatus(statusData);
-            
-            if (statusData.online) {
-              setServerState('running');
-              setStartupStep(null); // Clear startup step when fully running
-              
-              // Also fetch players and info
-              const playersResponse = await fetchWithAuth(`/api/players`);
-              const playersData: PlayerResponse = await playersResponse.json();
-              setPlayers(playersData.players || []);
+  const baseRequests = [
+    fetchJson<{ plugins: Plugin[] }>('/api/plugins'),
+    fetchJson<ConnectionInfo>('/api/connection-info').catch(() => null),
+    fetchJson<VersionResponse>('/api/version'),
+  ] as const;
 
-              const infoResponse = await fetchWithAuth(`/api/info`);
-              const infoData: ServerInfo = await infoResponse.json();
-              setInfo(infoData);
+  let status: ServerStatus | null = null;
+  let players: string[] = [];
+  let info: ServerInfo | null = null;
+  let startupStep: string | null = null;
 
-              // Also fetch plugins to keep state in sync
-              await fetchPlugins();
-            }
-            // If not online yet, stay in 'starting' state
-          } else if (!containerRunning && (serverState === 'running' || serverState === 'maintenance')) {
-            // Was running but now stopped externally
-            setServerState('stopped');
-            setStatus({ online: false, playerCount: 0, maxPlayers: 0 });
-            setPlayers([]);
-            shouldFetchFullData.current = false;
-            // Fetch plugins since we're now stopped and can edit them
-            await fetchPlugins();
-          }
-        } else {
-          // Just monitoring state changes (not actively fetching full data)
-          if (containerRunning && serverState === 'stopped') {
-            // Someone else started it
-            setServerState('starting');
-            shouldFetchFullData.current = true;
-            // Will fetch on next poll
-          } else if (!containerRunning && (serverState === 'running' || serverState === 'starting' || serverState === 'maintenance')) {
-            // Server stopped externally while we thought it was running
-            setServerState('stopped');
-            setStatus({ online: false, playerCount: 0, maxPlayers: 0 });
-            setPlayers([]);
-            // Fetch plugins since we're now stopped and can edit them
-            await fetchPlugins();
-          }
-        }
-      } catch (err) {
-        if (shouldFetchFullData.current) {
-          setError(err instanceof Error ? err.message : 'Unknown error');
-        }
-        console.log('Poll error:', err);
-      } finally {
-        setLoading(false);
-      }
-    })();
+  if (serverState === 'running' || serverState === 'maintenance') {
+    const [statusData, playersData, infoData, startupData] = await Promise.all([
+      fetchJson<ServerStatus>('/api/status'),
+      fetchJson<PlayerResponse>('/api/players'),
+      fetchJson<ServerInfo>('/api/info'),
+      fetchJson<{ startupStep: string | null }>('/api/startup-status').catch(() => ({ startupStep: null })),
+    ]);
+    status = statusData;
+    players = playersData.players || [];
+    info = infoData;
+    startupStep = startupData.startupStep ?? null;
+  } else if (serverState === 'starting') {
+    const startupData = await fetchJson<{ startupStep: string | null }>('/api/startup-status').catch(() => ({ startupStep: null }));
+    startupStep = startupData.startupStep ?? null;
+  }
 
-    activeFetches.current.add(fetchPromise);
-    try {
-      await fetchPromise;
-    } finally {
-      activeFetches.current.delete(fetchPromise);
-    }
-  }, [serverState]);
-
-  const fetchConnectionInfo = useCallback(async () => {
-    try {
-      const response = await fetchWithAuth('/api/connection-info');
-      if (!response.ok) {
-        return;
-      }
-      const result = await response.json() as ConnectionInfo;
-      setConnectionInfo(result);
-    } catch (error) {
-      console.warn('Failed to fetch connection info:', error);
-    }
-  }, []);
-
-  const startServer = async () => {
-    setServerState('starting');
-    setError(null);
-    shouldFetchFullData.current = true;
-    
-    // Trigger immediate poll to wake the server
-    await poll();
-  };
-
-  const stopServer = async () => {
-    setServerState('stopping');
-    setError(null);
-    
-    // Stop fetching full data
-    shouldFetchFullData.current = false;
-    
-    // Wait for all active fetches to complete
-    await Promise.all(Array.from(activeFetches.current));
-    
-    // Now send the stop command
-    try {
-      const response = await fetchWithAuth('/api/shutdown', {
-        method: 'POST'
-      });
-      const result = await response.json() as { success: boolean; error?: string };
-      
-      if (result.success) {
-        // Keep UI in 'stopping' until the container actually stops
-        setStatus({ online: false, playerCount: 0, maxPlayers: 0 });
-        setPlayers([]);
-        await poll();
-        // Fetch plugins since we're now stopped and can edit them
-        await fetchPlugins();
-      } else {
-        setError(result.error || 'Failed to stop server');
-        setServerState('running');
-        shouldFetchFullData.current = true;
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to stop server');
-      setServerState('running');
-      shouldFetchFullData.current = true;
-    }
-  };
-
-  const refresh = useCallback(async () => {
-    if (shouldFetchFullData.current) {
-      await poll();
-    }
-  }, [poll]);
-
-  const fetchPlugins = useCallback(async () => {
-    try {
-      const response = await fetchWithAuth('/api/plugins');
-      const data = await response.json() as { plugins: Plugin[] };
-      setPlugins(data.plugins || []);
-      await fetchConnectionInfo();
-    } catch (err) {
-      console.error('Failed to fetch plugins:', err);
-    }
-  }, [fetchConnectionInfo]);
-
-  const togglePlugin = useCallback(async (filename: string, enabled: boolean) => {
-    try {
-      const response = await fetchWithAuth(`/api/plugins/${filename}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ enabled }),
-      });
-      
-      const result = await response.json() as { success: boolean; plugins?: Plugin[]; error?: string };
-      
-      if (result.success && result.plugins) {
-        setPlugins(result.plugins);
-      } else {
-        throw new Error(result.error || 'Failed to toggle plugin');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to toggle plugin');
-      throw err;
-    }
-  }, []);
-
-  const fetchVersion = useCallback(async () => {
-    try {
-      const response = await fetchWithAuth('/api/version');
-      const data = await response.json() as VersionResponse;
-      setServerVersion(data.version);
-      setSupportedVersions(data.supported);
-      setCanChangeVersion(data.canChange);
-    } catch (err) {
-      console.error('Failed to fetch version:', err);
-    }
-  }, []);
-
-  const updateVersion = useCallback(async (version: string) => {
-    try {
-      const response = await fetchWithAuth('/api/version', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ version }),
-      });
-      
-      const result = await response.json() as { success: boolean; version?: string; error?: string };
-      
-      if (result.success && result.version) {
-        setServerVersion(result.version);
-        await fetchVersion(); // Refresh version data
-      } else {
-        throw new Error(result.error || 'Failed to update version');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update version');
-      throw err;
-    }
-  }, [fetchVersion]);
-
-  useEffect(() => {
-    // Only poll if authenticated
-    if (!isAuthenticated) {
-      return;
-    }
-    
-    // Check server state immediately on mount
-    poll();
-    fetchPlugins();
-    fetchVersion();
-
-    // Set up single unified polling interval
-    const pollInterval = setInterval(() => {
-      // Only start a new poll if there are no active fetches
-      if (activeFetches.current.size === 0) {
-        poll();
-      }
-    }, 5000);
-
-    return () => {
-      clearInterval(pollInterval);
-    };
-  }, [isAuthenticated, poll, fetchPlugins, fetchVersion]);
+  const [pluginsData, connectionInfo, versionData] = await Promise.all(baseRequests);
 
   return {
     status,
     players,
     info,
-    plugins,
+    plugins: pluginsData.plugins || [],
     connectionInfo,
-    loading,
-    error,
     serverState,
     startupStep,
-    serverVersion,
-    supportedVersions,
-    canChangeVersion,
-    startServer,
-    stopServer,
+    serverVersion: versionData.version,
+    supportedVersions: versionData.supported,
+    canChangeVersion: versionData.canChange,
+  };
+}
+
+export function useServerData(isAuthenticated: boolean) {
+  const queryClient = useQueryClient();
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [transitionState, setTransitionState] = useState<ServerState | null>(null);
+
+  const serverQuery = useQuery<ServerSnapshot>({
+    queryKey: SERVER_DATA_QUERY_KEY,
+    queryFn: fetchServerSnapshot,
+    enabled: isAuthenticated,
+    refetchInterval: (query) => {
+      const snapshot = query.state.data as ServerSnapshot | undefined;
+      const state = transitionState ?? snapshot?.serverState;
+      if (state === 'running') return 5000;
+      if (state === 'maintenance' || state === 'starting') return 7000;
+      if (state === 'stopping') return 4000;
+      return 12000;
+    },
+    refetchIntervalInBackground: true,
+  });
+
+  const invalidateServerData = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: SERVER_DATA_QUERY_KEY });
+  }, [queryClient]);
+
+  const startServerMutation = useMutation({
+    mutationFn: async () => {
+      await fetchWithAuth('/api/status');
+    },
+    onMutate: () => {
+      setLocalError(null);
+      setTransitionState('starting');
+    },
+    onError: (error) => {
+      setLocalError(error instanceof Error ? error.message : 'Failed to start server');
+    },
+    onSettled: () => {
+      setTransitionState(null);
+      invalidateServerData();
+    },
+  });
+
+  const stopServerMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetchWithAuth('/api/shutdown', {
+        method: 'POST',
+      });
+      const result = await response.json() as { success: boolean; error?: string };
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to stop server');
+      }
+    },
+    onMutate: () => {
+      setLocalError(null);
+      setTransitionState('stopping');
+    },
+    onError: (error) => {
+      setLocalError(error instanceof Error ? error.message : 'Failed to stop server');
+    },
+    onSettled: () => {
+      setTransitionState(null);
+      invalidateServerData();
+    },
+  });
+
+  const effectiveState = transitionState ?? serverQuery.data?.serverState ?? 'stopped';
+
+  const refresh = useCallback(async () => {
+    setLocalError(null);
+    await serverQuery.refetch();
+  }, [serverQuery]);
+
+  const togglePlugin = useCallback(async (filename: string, enabled: boolean) => {
+    setLocalError(null);
+    const response = await fetchWithAuth(`/api/plugins/${filename}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    const result = await response.json() as { success: boolean; plugins?: Plugin[]; error?: string };
+    if (!result.success || !result.plugins) {
+      throw new Error(result.error || 'Failed to toggle plugin');
+    }
+    queryClient.setQueryData<ServerSnapshot | undefined>(SERVER_DATA_QUERY_KEY, current => {
+      if (!current) return current;
+      return { ...current, plugins: result.plugins! };
+    });
+  }, [queryClient]);
+
+  const updateVersion = useCallback(async (version: string) => {
+    setLocalError(null);
+    const response = await fetchWithAuth('/api/version', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version }),
+    });
+    const result = await response.json() as { success: boolean; error?: string };
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to update version');
+    }
+    invalidateServerData();
+  }, [invalidateServerData]);
+
+  const loading = serverQuery.isLoading || (serverQuery.isFetching && !serverQuery.data);
+  const queryError = serverQuery.error instanceof Error ? serverQuery.error.message : null;
+  const error = localError ?? queryError;
+
+  return {
+    status: serverQuery.data?.status ?? null,
+    players: serverQuery.data?.players ?? [],
+    info: serverQuery.data?.info ?? null,
+    plugins: serverQuery.data?.plugins ?? [],
+    connectionInfo: serverQuery.data?.connectionInfo ?? null,
+    loading,
+    error,
+    serverState: effectiveState,
+    startupStep: serverQuery.data?.startupStep ?? null,
+    serverVersion: serverQuery.data?.serverVersion ?? 'paper-1-21-8',
+    supportedVersions: serverQuery.data?.supportedVersions ?? [],
+    canChangeVersion: serverQuery.data?.canChangeVersion ?? false,
+    startServer: () => startServerMutation.mutateAsync(),
+    stopServer: () => stopServerMutation.mutateAsync(),
     refresh,
-    fetchPlugins,
     togglePlugin,
     updateVersion,
   };
